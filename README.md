@@ -1,0 +1,231 @@
+# Paneloom / 格织
+
+Paneloom is a Windows-local-first, single-user desktop creation tool for turning scripts into consistent comic panels with project assets, shot versions, approval locks, exports, and creator feedback loops.
+
+Paneloom is not bundled with free model quota. You bring your own API key and choose the text, vision, and image models that fit your workflow.
+
+Licensed under the MIT License.
+
+## Current Status
+
+Early preview / local desktop beta architecture. Self-contained project folders, legacy migration, backup/restore, offline local editing, and the production-like pywebview/WebView2 runtime are validated. No installer or release is provided; packaging remains a separate, explicitly gated phase.
+
+## What It Does
+
+- Manage local comic/story projects.
+- Import scripts and narration drafts.
+- Break scripts into storyboard shots and comic panels.
+- Maintain a project bible for characters, locations, world notes, and visual style.
+- Upload or generate reference assets for characters, props, locations, and style.
+- Extract reusable style notes from reference images.
+- Inject a strict STYLE LOCK into image prompts.
+- Generate single panels or vertical comic strips.
+- Export JSON, CSV, XLSX, SRT, HTML, single images, and comic grid PNGs.
+- Track production schedules, work time, and social feedback screenshots.
+- Keep creative data in user-selected, self-contained project folders with project-relative asset paths.
+
+## Who It Is For
+
+- Comic creators planning repeatable visual continuity.
+- Writers turning scripts into panel-by-panel production plans.
+- Solo creators making narrated comics or social comic posts.
+- Developers who want a local-first, bring-your-own-key creative workflow app.
+
+## Local Development
+
+Requirements:
+
+- Python 3.11+
+- Node.js 20+
+- npm
+
+Install backend dependencies from the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+Install frontend dependencies:
+
+```powershell
+cd frontend
+npm install
+```
+
+Run the backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Run the frontend:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+Windows local browser-workspace launcher (not a desktop application shell):
+
+```powershell
+.\scripts\start_desktop_dev.ps1
+```
+
+Windows native-window architecture prototype for developers only:
+
+```powershell
+python -m venv .desktop-venv
+.\.desktop-venv\Scripts\python.exe -m pip install -r desktop\requirements.txt
+cd frontend
+npm run build
+cd ..
+.\scripts\start_desktop_prototype.ps1
+```
+
+The prototype uses pywebview/WebView2, serves the production React build and FastAPI API from one random `127.0.0.1` port, prevents duplicate instances, and closes the local service with the window. It is architecture validation, not an installer or release.
+
+Production-like desktop validation, using the built Vite application without a dev server:
+
+```powershell
+.\scripts\start_desktop_production_like.ps1
+```
+
+This entry starts the native window and local backend automatically. It still depends on the prepared developer runtime in `.desktop-venv` and therefore is not an end-user distribution package.
+
+## Quick Start: 10-Minute First Run
+
+After the backend and frontend are running, you can try the core workflow with
+the included fictional demo:
+
+1. Open `http://127.0.0.1:5173`.
+2. Create a new project from the Projects page.
+3. Open the Storyboard page.
+4. Paste `examples/demo-script.txt` into the script box, or use
+   `examples/demo-project/script.txt`.
+5. Run script breakdown to create panels.
+6. Add your own character/style reference image, or continue without references.
+7. Optionally extract style from a reference image and apply it to the project.
+8. Generate the first panel image with your configured image model.
+
+`examples/demo-project/` also shows the shape of a small project concept with
+fictional `script.txt`, `characters.json`, `style.json`, and `shots.json` files.
+It is not imported automatically; it is there so new contributors can understand
+the project structure quickly.
+
+The demo does not include copyrighted images, real project data, API keys, or
+generated assets.
+
+## Screenshots
+
+Screenshots should be prepared before a public GitHub release. Recommended
+views:
+
+- Dashboard
+- Storyboard
+- Asset Library
+- Feedback Review
+
+This repository does not include placeholder screenshots or generated fake UI
+captures.
+
+## Environment Variables
+
+Use the Settings page or export these values into the backend process environment.
+`.env.example` is a reference template; the backend does not auto-load a local `.env` file.
+Do not commit real API keys.
+
+Common variables:
+
+```text
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_PROVIDER_TYPE=custom
+TEXT_PROVIDER=gpt
+TEXT_PROVIDER_MODE=native
+TEXT_BASE_URL=
+TEXT_API_KEY=
+TEXT_MODEL=gpt-5.5
+IMAGE_MODEL=gpt-image-2
+IMAGE_SIZE=1024x1024
+IMAGE_QUALITY=low
+IMAGE_RESULT_MODE=auto
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+Settings are read in this order:
+
+1. `%LOCALAPPDATA%\Paneloom\config\settings.json`, with API keys encrypted for the current Windows user through DPAPI.
+2. Environment variables.
+3. Clear API errors if no usable settings exist.
+
+## Model API Configuration
+
+Paneloom supports official OpenAI and custom OpenAI-compatible endpoints for image generation. Text workflows can use GPT/OpenAI-compatible, GLM, or Google/Gemini style configurations through the Settings page.
+
+Generation quality, latency, timeout behavior, and reference-image support depend on your configured provider. Some relays do not fully support image edits with uploaded reference images.
+
+## Supported Script Import Formats
+
+- TXT
+- MD
+- SRT
+- CSV
+- PDF
+- DOCX
+- EPUB
+- RTF
+- HTML
+- XLSX
+
+Scanned PDFs need OCR before import.
+
+## Supported Export Formats
+
+- JSON
+- CSV
+- XLSX
+- SRT
+- HTML
+- Single generated images
+- Comic grid PNG
+
+## Data Locations
+
+- New projects: a user-selected folder, or `Documents\Paneloom Projects\<project-name>-<id>\` by default.
+- Project metadata and workspaces: inside the project root.
+- Reference assets: `<project>\assets\references\`.
+- Generated images and versions: `<project>\generated\`.
+- Exports: `<project>\exports\`.
+- Project backups: `<project>\backups\`, or another user-selected folder.
+- Settings and DPAPI-encrypted API keys: `%LOCALAPPDATA%\Paneloom\config\`.
+- Project registry, migration logs, cache, logs, and temporary files: `%LOCALAPPDATA%\Paneloom\`.
+- Legacy repository-local projects remain untouched as migration sources and rollback copies.
+
+## Privacy
+
+By default, your scripts, project files, reference images, generated images,
+exports, and feedback logs stay on your local machine in the folders listed
+above. Model providers may receive only the prompts and reference images needed
+when you explicitly run AI analysis, image generation, or image editing with
+your own API configuration. Local projects remain readable and editable while
+cloud AI is offline.
+
+## Verification
+
+```powershell
+python -m compileall backend api
+python -m unittest discover -s tests -v
+cd frontend
+npm run build
+```
+
+## License
+
+Paneloom is licensed under the MIT License. See `LICENSE`.

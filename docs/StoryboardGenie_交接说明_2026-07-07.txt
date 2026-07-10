@@ -1,0 +1,539 @@
+StoryboardGenie 交接说明
+日期：2026-07-07
+项目路径：C:\Users\esthe\Desktop\StoryboardGenie
+当前定位：Windows 桌面优先的漫画分镜与图片生成工具，后续再考虑 exe 打包。
+
+
+一、用户的核心目标
+
+用户正在做一个“根据剧本生成漫画分镜和图片资产”的本地桌面工具。
+
+核心使用场景：
+1. 用户上传或粘贴剧本、小说、旁白稿等文本。
+2. 工具用 AI 分析全文，先生成项目设定，包括主角、配角、道具、场景、世界观、统一风格。
+3. 如果用户没有现成人物/道具/场景参考图，工具应能用 AI 根据剧本自动生成“角色一致性参考图/资产图”。
+4. 用户也可以手动上传已有参考图。
+5. 生成核心资产后，再把剧本拆成漫画分镜。
+6. 每个分镜生成图片时，要引用这些角色/道具/场景参考图，尽量保持角色一致。
+7. 输出可以是：
+   - 单张图：一张图片表现一个故事瞬间。
+   - 条漫：一张竖图内有 3-5 个上下连续小格，形成漫画阅读节奏。
+8. 输出比例要适配主流平台，例如：
+   - 竖屏 9:16：Reels、Shorts、Stories、TikTok 风格视频
+   - 竖版 4:5：Instagram 竖版信息流
+   - 方图 1:1
+   - 横屏 16:9
+   - Pinterest 2:3
+9. 后续用户会把这些图拿去做解说漫画旁白视频，但工具内暂时不需要视频功能。
+10. 用户希望这个工具先做好桌面版，不急着做手机版，最后再打包成 Windows exe。
+
+
+二、技术栈和运行方式
+
+当前项目是 FastAPI 后端 + Vite React 前端。
+
+主要目录：
+- backend/app：后端服务
+- frontend/src：前端界面
+- api：OpenAI 兼容接口客户端
+- db/projects：本地项目数据
+- assets/generated：生成图片
+- assets/references：参考图/角色资产图
+- docs：文档
+
+当前开发服务：
+- 前端：http://127.0.0.1:5173
+- 后端：http://127.0.0.1:8000
+
+启动脚本：
+powershell -ExecutionPolicy Bypass -File scripts/start_desktop_dev.ps1
+
+常用验证命令：
+python -m compileall backend api
+npm run build
+
+前端构建目录：
+frontend/dist
+
+
+三、当前模型设置状态
+
+用户当前保存的设置在 db/settings.json。
+注意：不要把 API Key 泄露到文档或回复里。
+
+当前连接测试已通过：
+- 图片模型：ok:true
+- 文本模型：ok:true
+- 当前图片模型名：gpt-image-2
+- 当前文本模型名：gpt-5.5
+- 当前接口是 OpenAI 兼容中转接口
+
+已验证接口：
+POST http://127.0.0.1:8000/settings/test
+返回 ok:true。
+
+
+四、今天已经完成/修改过的主要能力
+
+1. 桌面工具方向确认
+
+用户确认该工具优先做 Windows 桌面端，先在本地浏览器调试，最后再打包 exe。
+暂时不做手机版。
+
+
+2. 多语言一致性
+
+界面支持：
+- 简体中文 zh-CN
+- 繁体中文 zh-TW
+- 英文 en
+- 日文 ja
+- 韩文 ko
+
+已经多次跑过 i18n key 检查：
+- 所有被 t("...") 使用的 key，在五种语言中都存在。
+- 最近一次结果：used=298, missing=0。
+
+相关文件：
+- frontend/src/i18n.jsx
+
+
+3. 文档导入
+
+用户指出剧本文件可能不是 PDF，也可能是主流文本/文案格式。
+工具已支持多种剧本文档导入格式：
+- TXT
+- MD
+- SRT
+- CSV
+- PDF
+- DOCX
+- EPUB
+- RTF
+- HTML
+- XLSX
+
+扫描版 PDF 仍需要先 OCR。
+
+相关文件：
+- backend/app/services/document_import_service.py
+- backend/app/routes/imports.py
+- frontend/src/pages/StoryboardPage.jsx
+
+
+4. 故事优化/分镜前置分析
+
+用户希望：剧本不要直接粗暴拆分成分镜，中间应该有“AI 优化故事/扩写/改写/建议分镜数/平台建议”的步骤。
+
+已加入故事优化区块：
+- AI 优化故事
+- 优化目标输入
+- 推荐分镜数
+- 平台建议
+- 分镜策略
+- 修改建议
+- 风险提醒
+- 可应用优化稿
+- 可应用推荐分镜数
+
+相关文件：
+- backend/app/services/story_optimization_service.py
+- backend/app/routes/shots.py
+- frontend/src/pages/StoryboardPage.jsx
+
+
+5. 项目设定/角色一致性
+
+用户明确要求：在分镜前，先根据完整剧本确定核心角色、配角、固定物品、场景、风格参考。
+
+已有能力：
+- AI 分析项目设定
+- 保存项目设定
+- 角色、场景、世界观、提示词前缀、负面提示词
+- 参考资产微调提示词
+- 上传用户已有参考图
+- AI 生成核心角色资产
+- AI 生成配角/道具/场景资产
+- 选中的参考图会作为后续分镜生成的一致性锚点
+
+相关文件：
+- backend/app/services/bible_analysis_service.py
+- backend/app/services/image_service.py
+- frontend/src/pages/StoryboardPage.jsx
+
+
+6. 最近修复：AI 生成参考图按钮没有返回/两个按钮一起动
+
+用户指出：
+- 她没有上传参考图，是想让 AI 根据剧本生成角色一致性参考图。
+- “生成核心角色资产”和“生成配角/道具/场景”按钮不工作。
+- 点第二个时第三个也一起显示正在生成。
+- 生成后没有明显返回图片位置。
+
+已修复：
+- 两个按钮不再共用同一个 busy 状态。
+- “生成核心角色资产”使用独立状态 reference-main。
+- “生成配角/道具/场景”使用独立状态 reference-world。
+- 点第二个不会让第三个一起显示“正在生成”。
+- 后端 ok:false 会被前端当作失败显示，不再吞掉错误。
+- 失败时会显示真实原因，例如接口失败、模型错误、下载失败、超时等。
+- AI 生成出的参考图会直接显示在“角色与一致性”区块下面。
+- 生成成功的参考图会自动选中，用于后续分镜生成。
+- 后端参考图生成失败时，会返回每个类别的具体错误信息。
+
+相关文件：
+- frontend/src/pages/StoryboardPage.jsx
+- frontend/src/i18n.jsx
+- frontend/src/styles/global.css
+- backend/app/services/image_service.py
+
+用户下一步测试方式：
+1. 刷新 http://127.0.0.1:5173
+2. 进入“角色与一致性”
+3. 点“生成核心角色资产”
+4. 成功后参考图应直接显示在该区块下面，并自动被选中
+5. 如果失败，界面应显示具体错误
+
+
+7. 图片比例/平台尺寸
+
+用户多次指出：选择竖屏 9:16 后，生成出来的文件真实像素仍然是横图或不是 9:16。
+
+已修复：
+- 后端不再只靠提示词要求比例。
+- 生成后会打开图片文件，真实检查像素尺寸。
+- 选择竖屏 9:16 时，最终保存文件必须是 1024x1792。
+- 如果最终尺寸不符合所选比例，生成会被标记为失败，不再假装成功。
+- 对模型接口使用“兼容生成尺寸 + 后端最终规范化尺寸”的方式。
+
+例子：
+- 竖屏 9:16 最终目标：1024x1792
+- 请求模型时可用更兼容的生成尺寸：1024x1536
+- 保存后再规范化为 1024x1792
+
+本地已测试：
+- 1536x1024 横图副本可以被规范化成 1024x1792。
+- 948x1659 非标准竖图也可以被规范化成 1024x1792。
+
+相关文件：
+- backend/app/services/aspect_service.py
+- backend/app/services/image_service.py
+- frontend/src/pages/StoryboardPage.jsx
+
+
+8. 条漫 / 单张图模式
+
+用户指出：竖屏比例不等于条漫。她需要明确两个选项：
+- 条漫
+- 单张图
+
+已加入明确二选一控件：
+- 条漫：一张竖图里生成 3-5 个上下连续小格，有分隔和从上到下的阅读节奏。
+- 单张图：一张图只表现一个故事瞬间，不做多格拼贴。
+
+默认现在是“条漫”，因为用户当前主要需求是漫画节奏。
+
+这个选择已接入：
+- 从剧本生成分镜
+- 重写为连续漫画分镜
+- 单张/队列生成图片
+
+后端提示词已加硬约束：
+- 选条漫时：明确要求一张竖图内包含 3-5 个 stacked comic panels，禁止单张海报式插画。
+- 选单张图时：明确要求 one single comic panel，禁止多格拼贴/条漫。
+
+相关字段：
+- visual_format: "webtoon_strip"
+- visual_format: "single_panel"
+
+相关文件：
+- backend/app/models/schemas.py
+- backend/app/services/planning_service.py
+- backend/app/services/image_service.py
+- backend/app/routes/generation.py
+- frontend/src/pages/StoryboardPage.jsx
+- frontend/src/styles/global.css
+- frontend/src/i18n.jsx
+
+注意：
+旧分镜提示词如果还是类似 “Manga storyboard panel 8... scene based on...” 的旧结构，即使选择条漫也容易生成单张插画。
+需要先点“重写为连续漫画分镜”，再重新生成。
+
+
+9. 重写现有分镜
+
+用户现有项目里有旧的粗糙分镜提示词：
+- 把原文长段塞进一格
+- 中英文混杂
+- 像单张插画，不像连续漫画
+
+已新增：
+- 重写为连续漫画分镜
+
+作用：
+- 保留现有分镜数量
+- 根据剧本/现有分镜重新生成更适合漫画结构的提示词
+- 可根据当前 visual_format 写成条漫或单张图逻辑
+- 默认会把旧输出清空，重置为 pending，便于重新生成
+
+相关文件：
+- backend/app/services/planning_service.py
+- backend/app/routes/shots.py
+- frontend/src/api.js
+- frontend/src/pages/StoryboardPage.jsx
+
+
+10. 并发与自动队列
+
+用户同时点击多个生成时出现并发冲突。
+
+已调整：
+- 前端明确显示当前稳定模式并发数为 1。
+- 同一项目一次只生成一张图。
+- 点击单张生成会加入队列。
+- 点击“自动排队生成未完成分镜”会把所有未完成/失败/卡住的分镜加入队列，按顺序生成。
+
+相关文件：
+- frontend/src/pages/StoryboardPage.jsx
+
+当前限制：
+- 仍是串行队列，不是多并发。
+- 这是为了避免图片接口并发冲突和状态覆盖。
+
+
+11. 图片预览与下载
+
+用户要求生成图可以点击查看并下载。
+
+已加入：
+- 点击缩略图打开大图预览
+- 下载图片
+- 打开大图
+- 复制图片链接
+- 输出芯片显示比例和真实尺寸
+- 图片 URL 加版本参数，减少缓存导致看旧图
+
+相关文件：
+- frontend/src/pages/StoryboardPage.jsx
+- frontend/src/api.js
+
+
+12. 漫画网格导出
+
+用户要求既能生成一张张图片，也能导出多个分镜拼成网格图。
+
+已加入：
+- 漫画预览
+- 选择网格画布比例
+- 选择列数
+- 导出网格 PNG
+
+相关文件：
+- frontend/src/pages/StoryboardPage.jsx
+
+
+13. 日程管理 / schedule management
+
+用户要求：
+- 输入项目目标和发布频率
+- 工具分析最佳进度
+- 规划每天做什么
+- 记录工作时间
+- 周复盘/月复盘
+- 社媒反馈记录
+- 可上传社媒数据截图并提取数据
+- 记录转化数、收入、转化率
+
+已加入：
+- 排期计划生成
+- 任务状态更新
+- 工作时长记录
+- 周/月复盘
+- 社媒反馈表
+- 社媒截图提取数据
+- 转化数、收入、币种
+
+相关文件：
+- backend/app/services/schedule_service.py
+- backend/app/services/social_feedback_ocr_service.py
+- backend/app/routes/schedule.py
+- backend/app/models/schemas.py
+- frontend/src/pages/SchedulePage.jsx
+
+
+五、今天修改过的重要文件清单
+
+后端：
+- backend/app/models/schemas.py
+- backend/app/routes/generation.py
+- backend/app/routes/shots.py
+- backend/app/services/aspect_service.py
+- backend/app/services/image_service.py
+- backend/app/services/planning_service.py
+- backend/app/services/schedule_service.py
+- backend/app/services/social_feedback_ocr_service.py
+
+前端：
+- frontend/src/pages/StoryboardPage.jsx
+- frontend/src/pages/SchedulePage.jsx
+- frontend/src/api.js
+- frontend/src/i18n.jsx
+- frontend/src/styles/global.css
+
+其他：
+- docs/StoryboardGenie_交接说明_2026-07-07.txt
+
+
+六、最近一次验证结果
+
+已通过：
+python -m compileall backend api
+
+已通过：
+npm run build
+
+已通过 i18n 检查：
+- zh-CN missing=0
+- zh-TW missing=0
+- en missing=0
+- ja missing=0
+- ko missing=0
+
+已重启服务：
+- http://127.0.0.1:8000
+- http://127.0.0.1:5173
+
+已检查：
+- /health 返回 ok:true
+- /settings/test 返回 ok:true
+
+
+七、当前用户正在测试的项目
+
+最新看到的项目：
+- project_id: project-7647b2ac
+- name: 真空垃圾神
+
+数据位置：
+db/projects/project-7647b2ac
+
+该项目里有些旧分镜已经是新条漫提示词，但也残留一些旧失败分镜。
+如果测试生成效果，建议：
+1. 先确认“条漫”模式已选中
+2. 如提示词仍粗糙，先点“重写为连续漫画分镜”
+3. 先生成核心角色资产
+4. 确认参考图显示并被选中
+5. 再自动排队生成未完成分镜
+
+
+八、仍需继续关注/明天优先检查的问题
+
+1. AI 生成参考资产是否真的成功落盘
+
+今天已修前端状态和错误显示，但没有实际触发消耗额度的图片生成。
+明天需要让用户点一次“生成核心角色资产”，观察：
+- 是否出现参考图
+- 是否保存到 assets/references/project-7647b2ac
+- 是否自动选中
+- 如果失败，界面是否显示具体原因
+
+
+2. 条漫生成质量
+
+虽然已在提示词中加入硬约束，但图片模型可能仍偶尔生成单张插画。
+如果仍不稳定，可以继续增强：
+- 后端给条漫模式生成更结构化的 prompt，例如：
+  “Panel A/B/C/D inside the image: ...”
+- planning_service 在 webtoon_strip 模式下不要只写“3-5 个小格”，而是明确每个小格的动作：
+  “小格1：建立场景；小格2：人物反应；小格3：转折；小格4：结果”
+- 可让每个分镜的 prompt 内显式列出 mini-panels。
+
+
+3. 旧分镜提示词仍可能混杂英文
+
+用户非常在意语言一致性。
+当前已有五语言 UI 检查，但内容生成出来的 prompt 仍可能因为模型或历史数据出现英文。
+可以继续优化：
+- 对中文剧本，planning_service 强制中文 prompt
+- 不要在中文项目中生成 “Manga storyboard panel...” 这类英文开头
+- 重写分镜时清洗旧英文模板
+
+
+4. 角色一致性仍需进一步强化
+
+当前逻辑：
+- 项目参考图会作为 edit_image 的输入或提示词参考
+- 项目设定会拼接进 shot prompt
+
+后续可增强：
+- 每个核心角色资产生成后，自动写入 project_bible.characters
+- 生成分镜图时默认选中全部核心参考图
+- 若用户取消选中，界面提醒“一致性会下降”
+- 为每个角色保存姓名、外观、服装、道具、参考图文件名
+
+
+5. 图片比例已硬校验，但构图仍可能不理想
+
+当前会强制输出 1024x1792 等目标尺寸。
+但如果模型返回横图，后端会裁切成竖图，可能损失内容。
+更好的后续方案：
+- 对竖屏条漫模式，提示词进一步强调 vertical composition with stacked panels
+- 对 provider_size 做模型兼容表
+- 如果模型返回横图，除了裁切，也可以考虑白底扩展/重新生成策略
+
+
+6. 参考资产接口可能请求时间较长
+
+图片生成接口 timeout 是 300 秒。
+用户可能以为卡住。
+后续可加：
+- 前端生成进度提示：“图片模型生成可能需要 1-5 分钟”
+- 可取消按钮
+- 后端 job 状态轮询，而不是单个长请求
+- 生成日志直接展示在 UI
+
+
+7. 打包 exe 还没有做
+
+用户已经明确：最后一步才打包。
+目前仍是开发服务：
+- FastAPI
+- Vite
+
+后续打包方向可以考虑：
+- Tauri + FastAPI sidecar
+- Electron + backend child process
+- PyInstaller 打包后端 + 前端静态文件
+
+不要现在急着打包，用户还在调试核心流程。
+
+
+九、明天给新模型的建议工作顺序
+
+1. 先不要大改架构。
+2. 刷新 http://127.0.0.1:5173，实际测试“生成核心角色资产”。
+3. 如果失败，读取界面错误和后端返回。
+4. 检查 assets/references/project-7647b2ac 是否出现图片。
+5. 如果参考图生成成功，确认它是否自动选中。
+6. 点“重写为连续漫画分镜”，确认 prompt 语言和条漫结构。
+7. 选“条漫 + 竖屏 9:16”，生成一张分镜，检查：
+   - 是否真实 1024x1792
+   - 是否一张图内有 3-5 个上下连续小格
+   - 是否保持角色一致
+8. 如果生成仍像单图，继续增强 webtoon_strip prompt，让每张图内部明确分成 mini-panels。
+9. 最后再考虑 UI 细节优化。
+
+
+十、给后续模型的注意事项
+
+- 用户中文表达偏口语，但需求非常明确：她要的是实际可用的漫画生产工具。
+- 不要只解释，要直接改。
+- 不要把“竖屏比例”和“条漫”混为一谈。
+- 不要让按钮状态含糊。
+- 失败必须显示原因。
+- 旧输出不会自动变好，必须重写分镜并重新生成。
+- 不要泄露 db/settings.json 里的 API Key。
+- 当前不是 Git 仓库，不能依赖 git diff。
+- 编辑文件时注意已有用户数据，不要删除 db/projects 和 assets。
+历史交接说明：本文不代表当前交付状态。请以 docs/audit_report_2026-07-10.md 和实际测试结果为准。
+

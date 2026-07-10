@@ -1,0 +1,9 @@
+{
+  "visual_style": "black-and-white manga storyboard, clean line art, soft rain atmosphere, gentle screen tones, consistent character silhouettes, no speech bubbles, no readable text",
+  "style_lock": {
+    "linework": "clean manga ink lines with controlled variation",
+    "tone": "soft grayscale, rain texture, quiet contrast",
+    "composition": "clear panels with readable character action",
+    "avoid": "watermarks, random text, distorted hands, inconsistent faces"
+  }
+}

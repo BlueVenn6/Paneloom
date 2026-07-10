@@ -1,0 +1,457 @@
+import io
+import json
+import tempfile
+import unittest
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest.mock import patch
+
+from docx import Document
+from openpyxl import Workbook, load_workbook
+from PIL import Image
+from pypdf import PdfWriter
+
+from backend.app import config
+from backend.app.models.schemas import (
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectWorkspacePayload,
+    ImageGenerationRequest,
+    ReviewRequest,
+    SchedulePlanRequest,
+    SettingsPayload,
+    ShotCreate,
+    ShotUpdate,
+    SocialFeedbackCreate,
+)
+from backend.app.routes import settings as settings_routes
+from backend.app.services import export_service, image_service, project_service
+from backend.app.services.document_import_service import DocumentImportError, import_document
+from backend.app.services.schedule_service import (
+    add_social_feedback,
+    generate_review,
+    generate_schedule,
+    get_schedule,
+)
+from backend.app.services.shotlist_service import (
+    add_shot,
+    list_shots,
+    select_shot_version,
+    update_shot,
+)
+
+
+class IsolatedProjectTestCase(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.projects_dir = self.root / "db" / "projects"
+        self.projects_home = self.root / "projects-home"
+        self.registry_path = self.root / "app-data" / "registry" / "projects.json"
+        self.exports_dir = self.root / "exports"
+        self.references_dir = self.root / "assets" / "references"
+        self.generated_dir = self.root / "assets" / "generated"
+        self.patchers = [
+            patch.object(project_service, "PROJECTS_DIR", self.projects_dir),
+            patch.object(project_service, "PROJECTS_HOME", self.projects_home),
+            patch.object(project_service, "REGISTRY_PATH", self.registry_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temporary_directory.cleanup()
+
+    def create_project(self, name="Test Project"):
+        return project_service.create_project(ProjectCreate(name=name))
+
+    def test_project_workspace_is_isolated_and_lifecycle_is_recoverable(self):
+        first = self.create_project("First")
+        second = self.create_project("Second")
+        project_service.save_project_workspace(
+            first["project_id"],
+            ProjectWorkspacePayload(
+                script="first project script",
+                story_goal="stronger opening",
+                selected_aspects=["square"],
+            ),
+        )
+
+        self.assertEqual(
+            project_service.get_project_workspace(first["project_id"])["script"],
+            "first project script",
+        )
+        self.assertEqual(project_service.get_project_workspace(second["project_id"])["script"], "")
+
+        renamed = project_service.update_project(
+            first["project_id"],
+            ProjectUpdate(name="Renamed", archived=True),
+        )
+        self.assertEqual(renamed["name"], "Renamed")
+        self.assertTrue(renamed["archived"])
+
+        duplicate = project_service.duplicate_project(first["project_id"])
+        self.assertEqual(
+            project_service.get_project_workspace(duplicate["project_id"])["script"],
+            "first project script",
+        )
+        deleted = project_service.delete_project(duplicate["project_id"])
+        self.assertTrue(deleted["deleted"])
+        self.assertTrue(Path(deleted["recoverable_path"]).exists())
+        self.assertIsNone(project_service.get_project(duplicate["project_id"]))
+
+        with self.assertRaises(FileNotFoundError):
+            project_service.get_project_dir(r"..\..\outside")
+
+    def test_locked_shot_cannot_be_overwritten_edited_or_deleted(self):
+        project = self.create_project("Lock Guard")
+        shot = add_shot(project["project_id"], ShotCreate(prompt="first frame"))
+        with self.assertRaisesRegex(ValueError, "saved image"):
+            project_service.require_project(project["project_id"])
+            from backend.app.services.shotlist_service import patch_shot
+
+            patch_shot(project["project_id"], shot["shot_id"], ShotUpdate(locked=True))
+
+        image_path = self.generated_dir / project["project_id"] / "frame.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (16, 16), color=(20, 30, 40)).save(image_path)
+        version = {
+            "version_id": "v1",
+            "output_path": str(image_path),
+            "output_url": f"/assets/generated/{project['project_id']}/frame.png",
+            "outputs": [],
+        }
+        update_shot(
+            project["project_id"],
+            shot["shot_id"],
+            {
+                "status": "done",
+                "output_path": str(image_path),
+                "output_url": version["output_url"],
+                "versions": [version],
+                "selected_version_id": "v1",
+            },
+        )
+        from backend.app.services.shotlist_service import delete_shot, patch_shot
+
+        locked = patch_shot(
+            project["project_id"],
+            shot["shot_id"],
+            ShotUpdate(locked=True, approval_status="approved"),
+        )
+        self.assertTrue(locked["locked"])
+        self.assertEqual(locked["approval_status"], "approved")
+        with self.assertRaisesRegex(ValueError, "Unlock"):
+            patch_shot(project["project_id"], shot["shot_id"], ShotUpdate(prompt="overwrite"))
+        with self.assertRaisesRegex(ValueError, "Unlock"):
+            select_shot_version(project["project_id"], shot["shot_id"], "v1")
+        with self.assertRaisesRegex(ValueError, "Unlock"):
+            delete_shot(project["project_id"], shot["shot_id"])
+
+        blocked = image_service.generate_shot_image(project["project_id"], shot["shot_id"])
+        self.assertEqual(blocked["error_code"], "shot_locked")
+        batch = image_service.generate_project_batch(project["project_id"], only_pending=False)
+        self.assertEqual(batch["processed"], 0)
+
+        unlocked = patch_shot(
+            project["project_id"],
+            shot["shot_id"],
+            ShotUpdate(locked=False, approval_status="draft"),
+        )
+        self.assertFalse(unlocked["locked"])
+
+    def test_concurrent_shot_additions_do_not_overwrite_each_other(self):
+        project = self.create_project("Concurrent")
+
+        def create(index):
+            return add_shot(
+                project["project_id"],
+                ShotCreate(scene_id=f"P{index:03d}", prompt=f"Panel {index}"),
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(create, range(40)))
+
+        shots = list_shots(project["project_id"])
+        self.assertEqual(len(shots), 40)
+        self.assertEqual(len({shot["shot_id"] for shot in shots}), 40)
+
+    def test_low_capacity_schedule_returns_overload_instead_of_hanging(self):
+        project = self.create_project("Schedule")
+        result = generate_schedule(
+            project["project_id"],
+            SchedulePlanRequest(
+                start_date="2026-07-10",
+                target_publish_date="2026-07-17",
+                daily_available_hours=0.25,
+                total_content_items=1,
+                panels_per_content=120,
+            ),
+        )
+        self.assertTrue(result["tasks"])
+        self.assertTrue(result["plan"]["summary"]["overloaded_days"])
+
+    def test_review_uses_latest_social_snapshot_and_persists(self):
+        project = self.create_project("Review")
+        common = {
+            "content_id": "EP001",
+            "platform": "Platform A",
+            "publish_date": "2026-07-08",
+        }
+        add_social_feedback(
+            project["project_id"],
+            SocialFeedbackCreate(**common, snapshot_date="2026-07-09", views=100),
+        )
+        add_social_feedback(
+            project["project_id"],
+            SocialFeedbackCreate(**common, snapshot_date="2026-07-10", views=250),
+        )
+        add_social_feedback(
+            project["project_id"],
+            SocialFeedbackCreate(
+                content_id="EP002",
+                platform="Platform B",
+                publish_date="2026-07-08",
+                snapshot_date="2026-07-10",
+                views=400,
+            ),
+        )
+        review = generate_review(
+            project["project_id"],
+            ReviewRequest(period="week", anchor_date="2026-07-10"),
+        )
+        self.assertEqual(review["views"], 650)
+        self.assertEqual(review["posts_logged"], 2)
+        self.assertEqual(review["best_platform"], "Platform B")
+        self.assertEqual(get_schedule(project["project_id"])["reviews"]["week"]["views"], 650)
+
+    def test_exports_are_real_and_parseable(self):
+        project = self.create_project("Exports")
+        add_shot(
+            project["project_id"],
+            ShotCreate(
+                scene_id="P001",
+                duration=2.5,
+                visual_description="A door opens",
+                prompt="A cinematic panel of a door opening",
+                revision_notes="Narration line",
+            ),
+        )
+        paths = {}
+        for export_format in ["json", "csv", "xlsx", "srt", "html"]:
+            result = export_service.export_project(project["project_id"], export_format)
+            path = project_service.resolve_project_path(project["project_id"], result["path"])
+            self.assertTrue(path.exists())
+            self.assertGreater(path.stat().st_size, 0)
+            paths[export_format] = path
+
+        workbook = load_workbook(paths["xlsx"], read_only=True)
+        self.assertEqual(workbook.active["B2"].value, "P001")
+        workbook.close()
+        self.assertIn("00:00:02,500", paths["srt"].read_text(encoding="utf-8"))
+        self.assertIn("A door opens", paths["html"].read_text(encoding="utf-8"))
+        self.assertEqual(
+            json.loads(paths["json"].read_text(encoding="utf-8"))["shots"][0]["scene_id"],
+            "P001",
+        )
+
+    def test_reference_upload_requires_a_real_supported_image_and_avoids_overwrite(self):
+        project = self.create_project("References")
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32), color=(20, 120, 200)).save(buffer, format="PNG")
+        first = image_service.save_reference_image(
+            project["project_id"], "hero.png", buffer.getvalue()
+        )
+        second = image_service.save_reference_image(
+            project["project_id"], "hero.png", buffer.getvalue()
+        )
+        self.assertNotEqual(first["filename"], second["filename"])
+        self.assertTrue(
+            project_service.resolve_project_path(project["project_id"], first["path"]).exists()
+        )
+        with self.assertRaises(ValueError):
+            image_service.save_reference_image(project["project_id"], "fake.png", b"not an image")
+
+    def test_generated_version_can_be_selected(self):
+        project = self.create_project("Versions")
+        shot = add_shot(project["project_id"], ShotCreate(prompt="Panel"))
+        first_path = project_service.get_project_dir(project["project_id"]) / "first.png"
+        second_path = project_service.get_project_dir(project["project_id"]) / "second.png"
+        first_path.write_bytes(b"first")
+        second_path.write_bytes(b"second")
+        versions = [
+            {
+                "version_id": "v1",
+                "output_path": str(first_path),
+                "output_url": "/assets/generated/first.png",
+                "outputs": [{"output_url": "/assets/generated/first.png"}],
+            },
+            {
+                "version_id": "v2",
+                "output_path": str(second_path),
+                "output_url": "/assets/generated/second.png",
+                "outputs": [{"output_url": "/assets/generated/second.png"}],
+            },
+        ]
+        update_shot(project["project_id"], shot["shot_id"], {"versions": versions})
+        selected = select_shot_version(project["project_id"], shot["shot_id"], "v1")
+        self.assertEqual(selected["selected_version_id"], "v1")
+        self.assertEqual(selected["output_url"], "/assets/generated/first.png")
+
+    def test_corrupt_shot_json_is_not_silently_overwritten(self):
+        project = self.create_project("Corrupt")
+        path = project_service.get_project_dir(project["project_id"]) / "shots.json"
+        path.write_text("{broken", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "not overwritten"):
+            list_shots(project["project_id"])
+        self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
+
+    def test_partial_multi_aspect_generation_keeps_successful_output(self):
+        project = self.create_project("Partial Generation")
+        shot = add_shot(project["project_id"], ShotCreate(prompt="Panel"))
+        calls = 0
+
+        def fake_generate(settings, prompt, size, quality, output_path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                Image.new("RGB", (1024, 1024), color=(30, 40, 50)).save(output_path)
+                return {
+                    "ok": True,
+                    "status": "done",
+                    "output_path": str(output_path),
+                    "output_url": "",
+                    "download_status": "saved_b64_json",
+                    "download_error": "",
+                    "endpoint": "https://example.invalid/images/generations",
+                    "model": "test-image",
+                    "size": size,
+                    "quality": quality or "low",
+                    "status_code": 200,
+                }
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": "rate_limited",
+                "error_code": "rate_limited",
+                "error_message": "second aspect failed",
+                "status_code": 429,
+            }
+
+        active_settings = {
+            "provider_type": "custom",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "test-key",
+            "image_model": "test-image",
+            "image_size": "1024x1024",
+            "image_quality": "low",
+            "image_result_mode": "auto",
+        }
+        with (
+            patch.object(image_service, "get_active_settings", return_value=active_settings),
+            patch.object(image_service, "generate_image", side_effect=fake_generate),
+        ):
+            result = image_service.generate_shot_image(
+                project["project_id"],
+                shot["shot_id"],
+                ImageGenerationRequest(aspect_presets=["square", "portrait_4_5"]),
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["outputs"]), 1)
+        stored = list_shots(project["project_id"])[0]
+        self.assertTrue(stored["output_url"])
+        self.assertFalse(Path(stored["output_path"]).is_absolute())
+        self.assertTrue(
+            project_service.resolve_project_path(project["project_id"], stored["output_path"]).is_file()
+        )
+        self.assertEqual(stored["versions"][-1]["status"], "partial")
+
+
+class DocumentImportTests(unittest.TestCase):
+    def test_supported_document_matrix_and_scanned_pdf_error(self):
+        document = Document()
+        document.add_paragraph("DOCX scene")
+        docx = io.BytesIO()
+        document.save(docx)
+
+        workbook = Workbook()
+        workbook.active.append(["XLSX scene"])
+        xlsx = io.BytesIO()
+        workbook.save(xlsx)
+
+        epub = io.BytesIO()
+        with zipfile.ZipFile(epub, "w") as archive:
+            archive.writestr("chapter.xhtml", "<html><body><p>EPUB scene</p></body></html>")
+
+        samples = [
+            ("story.txt", b"TXT scene", "TXT scene"),
+            ("story.md", b"# MD scene", "MD scene"),
+            ("story.srt", b"1\n00:00:00,000 --> 00:00:01,000\nSRT scene", "SRT scene"),
+            ("story.csv", b"scene,action\nP001,CSV scene\nP002,next", "CSV scene"),
+            ("story.html", b"<p>HTML scene</p>", "HTML scene"),
+            ("story.rtf", b"{\\rtf1 RTF scene}", "RTF scene"),
+            ("story.epub", epub.getvalue(), "EPUB scene"),
+            ("story.docx", docx.getvalue(), "DOCX scene"),
+            ("story.xlsx", xlsx.getvalue(), "XLSX scene"),
+        ]
+        for filename, content, expected in samples:
+            with self.subTest(filename=filename):
+                self.assertIn(expected, import_document(filename, content)["text"])
+
+        pdf = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(pdf)
+        with self.assertRaisesRegex(DocumentImportError, "OCR"):
+            import_document("scan.pdf", pdf.getvalue())
+
+
+class SettingsSecurityTests(unittest.TestCase):
+    def test_both_keys_are_masked_and_failed_connection_is_not_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            with patch.object(config, "SETTINGS_PATH", settings_path):
+                config.save_settings(
+                    {
+                        "provider_type": "custom",
+                        "base_url": "https://example.invalid/v1",
+                        "api_key": "sk-image-secret-value",
+                        "text_api_key": "sk-text-secret-value",
+                        "text_provider": "gpt",
+                        "text_provider_mode": "relay",
+                        "text_base_url": "https://example.invalid/v1",
+                    }
+                )
+                stored_text = settings_path.read_text(encoding="utf-8")
+                self.assertNotIn("sk-image-secret-value", stored_text)
+                self.assertNotIn("sk-text-secret-value", stored_text)
+                self.assertIn("api_key_encrypted", stored_text)
+                public = config.get_active_settings(include_secret=False)
+                self.assertIn("****", public["api_key"])
+                self.assertIn("****", public["text_api_key"])
+                self.assertNotIn("secret-value", public["text_api_key"])
+
+        payload = SettingsPayload(
+            provider_type="custom",
+            base_url="https://example.invalid/v1",
+            api_key="image-key",
+            text_provider="gpt",
+            text_provider_mode="relay",
+            text_base_url="https://example.invalid/v1",
+            text_api_key="text-key",
+        )
+        failed = {"ok": False, "errors": ["connection failed"]}
+        with (
+            patch.object(settings_routes, "_merge_existing_secret", return_value=payload.model_dump()),
+            patch.object(settings_routes, "_test_openai_compatible_models", return_value=failed),
+        ):
+            response = settings_routes.test_settings(payload)
+        self.assertFalse(response.ok)
+
+
+if __name__ == "__main__":
+    unittest.main()

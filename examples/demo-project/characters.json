@@ -1,0 +1,16 @@
+{
+  "characters": [
+    {
+      "id": "mira",
+      "name": "Mira",
+      "role": "young creator",
+      "visual_notes": "Short dark hair, raincoat, canvas bag, expressive eyes, carries a worn sketchbook."
+    },
+    {
+      "id": "bookshop_keeper",
+      "name": "Bookshop Keeper",
+      "role": "quiet guide",
+      "visual_notes": "Older figure behind the counter, round glasses, layered cardigan, calm posture."
+    }
+  ]
+}

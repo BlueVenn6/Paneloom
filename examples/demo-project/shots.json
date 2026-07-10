@@ -1,0 +1,20 @@
+[
+  {
+    "scene_id": "P001",
+    "visual_description": "Exterior of an old bookshop in heavy rain; warm light spills onto the wet street.",
+    "prompt": "Wide establishing comic panel of a forgotten bookshop during rain, warm window light, quiet street, black-and-white manga line art.",
+    "revision_notes": "Keep the mood mysterious but welcoming."
+  },
+  {
+    "scene_id": "P002",
+    "visual_description": "Mira steps inside, holding her sketchbook close while water drips from her raincoat.",
+    "prompt": "Medium shot of Mira entering the bookshop, sketchbook in hand, shelves surrounding her, raincoat dripping, clean manga line art.",
+    "revision_notes": "Make Mira curious rather than frightened."
+  },
+  {
+    "scene_id": "P003",
+    "visual_description": "The notebook on the counter opens by itself and small panels appear in the margins.",
+    "prompt": "Close-up of an old notebook opening by itself, tiny comic panels forming in the margins, soft glow, grayscale manga tones.",
+    "revision_notes": "No readable text on the page."
+  }
+]
