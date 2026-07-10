@@ -27,12 +27,13 @@ DEFAULT_PROJECTS_HOME = Path(
         str(Path.home() / "Documents" / "Paneloom Projects"),
     )
 )
-DB_DIR = ROOT_DIR / "db"
+LEGACY_DATA_ROOT = Path(os.getenv("PANELOOM_LEGACY_DATA_ROOT", str(ROOT_DIR)))
+DB_DIR = LEGACY_DATA_ROOT / "db"
 PROJECTS_DIR = DB_DIR / "projects"
-ASSETS_DIR = ROOT_DIR / "assets"
+ASSETS_DIR = LEGACY_DATA_ROOT / "assets"
 GENERATED_ASSETS_DIR = ASSETS_DIR / "generated"
 REFERENCE_ASSETS_DIR = ASSETS_DIR / "references"
-EXPORTS_DIR = ROOT_DIR / "exports"
+EXPORTS_DIR = LEGACY_DATA_ROOT / "exports"
 LEGACY_SETTINGS_PATH = DB_DIR / "settings.json"
 DEFAULT_SETTINGS_PATH = APP_CONFIG_DIR / "settings.json"
 SETTINGS_PATH = Path(os.getenv("PANELOOM_SETTINGS_PATH", str(DEFAULT_SETTINGS_PATH)))
@@ -57,11 +58,6 @@ def ensure_runtime_dirs() -> None:
     APP_TEMP_DIR.mkdir(parents=True, exist_ok=True)
     APP_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_PROJECTS_HOME.mkdir(parents=True, exist_ok=True)
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    GENERATED_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    REFERENCE_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def mask_api_key(api_key: str | None) -> str:

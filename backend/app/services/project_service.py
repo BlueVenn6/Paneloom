@@ -293,13 +293,16 @@ def project_file_url(project_id: str, category: str, filename: str) -> str:
 def _write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary_path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    if path.exists():
-        shutil.copy2(path, path.with_suffix(f"{path.suffix}.bak"))
-    temporary_path.replace(path)
+    try:
+        temporary_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(f"{path.suffix}.bak"))
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _read_json(path: Path, fallback: object) -> object:

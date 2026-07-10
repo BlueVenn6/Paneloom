@@ -47,21 +47,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount(
-    "/assets/generated",
-    StaticFiles(directory=str(GENERATED_ASSETS_DIR)),
-    name="generated-assets",
-)
-app.mount(
-    "/assets/references",
-    StaticFiles(directory=str(REFERENCE_ASSETS_DIR)),
-    name="reference-assets",
-)
-app.mount(
-    "/exports",
-    StaticFiles(directory=str(EXPORTS_DIR)),
-    name="exports",
-)
+for route, directory, name in (
+    ("/assets/generated", GENERATED_ASSETS_DIR, "generated-assets"),
+    ("/assets/references", REFERENCE_ASSETS_DIR, "reference-assets"),
+    ("/exports", EXPORTS_DIR, "exports"),
+):
+    if directory.is_dir():
+        app.mount(route, StaticFiles(directory=str(directory)), name=name)
 
 
 @app.get("/health")

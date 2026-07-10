@@ -1,4 +1,5 @@
 import io
+import base64
 import json
 import tempfile
 import unittest
@@ -11,7 +12,9 @@ from docx import Document
 from openpyxl import Workbook, load_workbook
 from PIL import Image
 from pypdf import PdfWriter
+import requests
 
+from api import openai_image_client
 from backend.app import config
 from backend.app.models.schemas import (
     ProjectCreate,
@@ -369,6 +372,70 @@ class IsolatedProjectTestCase(unittest.TestCase):
             project_service.resolve_project_path(project["project_id"], stored["output_path"]).is_file()
         )
         self.assertEqual(stored["versions"][-1]["status"], "partial")
+
+
+class ImageClientBoundaryTests(unittest.TestCase):
+    def test_request_construction_and_atomic_result_persistence(self):
+        image = io.BytesIO()
+        Image.new("RGB", (8, 8), color=(10, 20, 30)).save(image, format="PNG")
+
+        class Response:
+            status_code = 200
+            text = ""
+
+            @staticmethod
+            def json():
+                return {"data": [{"b64_json": base64.b64encode(image.getvalue()).decode("ascii")}]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "generated.png"
+            with patch.object(openai_image_client.requests, "post", return_value=Response()) as post:
+                result = openai_image_client.generate_image(
+                    {
+                        "api_key": "controlled-test-key",
+                        "base_url": "http://127.0.0.1:9/v1",
+                        "image_model": "controlled-model",
+                        "image_size": "64x64",
+                        "image_quality": "low",
+                        "image_result_mode": "prefer_b64_json",
+                    },
+                    "one test panel",
+                    output_path=output,
+                )
+
+            request = post.call_args
+            self.assertEqual(request.kwargs["json"]["model"], "controlled-model")
+            self.assertEqual(request.kwargs["json"]["prompt"], "one test panel")
+            self.assertEqual(request.kwargs["json"]["size"], "64x64")
+            self.assertEqual(request.kwargs["json"]["quality"], "low")
+            self.assertEqual(request.kwargs["json"]["response_format"], "b64_json")
+            self.assertEqual(request.kwargs["timeout"], (30, openai_image_client.IMAGE_REQUEST_TIMEOUT_SECONDS))
+            self.assertTrue(result["ok"])
+            self.assertTrue(output.is_file())
+            with Image.open(output) as persisted:
+                self.assertEqual(persisted.size, (8, 8))
+            self.assertEqual(list(output.parent.glob(".*.tmp")), [])
+
+    def test_timeout_is_classified_without_a_false_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "must-not-exist.png"
+            with patch.object(
+                openai_image_client.requests,
+                "post",
+                side_effect=requests.ReadTimeout("controlled timeout"),
+            ):
+                result = openai_image_client.generate_image(
+                    {
+                        "api_key": "controlled-test-key",
+                        "base_url": "http://127.0.0.1:9/v1",
+                        "image_model": "controlled-model",
+                    },
+                    "timeout test",
+                    output_path=output,
+                )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "request_timeout")
+        self.assertFalse(output.exists())
 
 
 class DocumentImportTests(unittest.TestCase):

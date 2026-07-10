@@ -49,13 +49,16 @@ def _read_shots(project_id: str) -> list[dict]:
 def _write_shots(project_id: str, shots: list[dict]) -> None:
     path = _shots_path(project_id)
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary_path.write_text(
-        json.dumps(shots, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    if path.exists():
-        shutil.copy2(path, path.with_suffix(".json.bak"))
-    temporary_path.replace(path)
+    try:
+        temporary_path.write_text(
+            json.dumps(shots, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if path.exists():
+            shutil.copy2(path, path.with_suffix(".json.bak"))
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     touch_project(project_id)
 
 

@@ -114,6 +114,7 @@ def main() -> int:
                     "PANELOOM_PROJECTS_HOME": str(root / "projects"),
                     "PANELOOM_SETTINGS_PATH": str(root / "appdata" / "config" / "settings.json"),
                     "PANELOOM_RUNTIME_STATE_PATH": str(runtime_state_path),
+                    "PANELOOM_LEGACY_DATA_ROOT": str(root / "nonexistent legacy source"),
                     "OPENAI_PROVIDER_TYPE": "custom",
                     "OPENAI_BASE_URL": f"http://127.0.0.1:{provider_state['port']}/v1",
                     "OPENAI_API_KEY": "controlled-test-key",

@@ -14,6 +14,7 @@ import uvicorn
 from fastapi.staticfiles import StaticFiles
 
 
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
 ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 MUTEX_NAME = "Local\\PaneloomDesktopSingleInstance"
@@ -112,12 +113,16 @@ class LocalDesktopServer:
         self.stop()
         raise TimeoutError(f"The local desktop service did not become ready: {last_error}")
 
-    def stop(self, timeout: float = 10.0) -> None:
+    def stop(self, timeout: float = 10.0) -> bool:
+        """Stop the local server and report whether an in-flight request required force-exit."""
         self.server.should_exit = True
         if self.thread.is_alive():
-            self.thread.join(timeout)
+            self.thread.join(min(timeout, 5.0))
         if self.thread.is_alive():
-            raise RuntimeError("The local desktop service did not stop cleanly.")
+            self.server.force_exit = True
+            self.thread.join(max(0.5, timeout - 5.0))
+            return True
+        return False
 
 
 def runtime_smoke(port: int = 0) -> dict:
@@ -170,11 +175,20 @@ def run_window(port: int = 0) -> None:
             storage_path=str(APP_CACHE_DIR / "webview"),
         )
     finally:
-        server.stop()
+        forced_server_shutdown = server.stop()
         from backend.app.routes.generation import interrupt_active_jobs_for_desktop_shutdown
+        from backend.app.services.shotlist_service import recover_interrupted_generation_states
 
-        _HARD_EXIT_REQUIRED = interrupt_active_jobs_for_desktop_shutdown()
-        _write_runtime_state("stopped", server.port, active_jobs_interrupted=_HARD_EXIT_REQUIRED)
+        active_jobs_interrupted = interrupt_active_jobs_for_desktop_shutdown()
+        if forced_server_shutdown and not active_jobs_interrupted:
+            recover_interrupted_generation_states()
+        _HARD_EXIT_REQUIRED = forced_server_shutdown or active_jobs_interrupted
+        _write_runtime_state(
+            "stopped",
+            server.port,
+            active_jobs_interrupted=_HARD_EXIT_REQUIRED,
+            forced_server_shutdown=forced_server_shutdown,
+        )
 
 
 def _write_runtime_state(status: str, port: int, **details) -> None:
@@ -206,12 +220,28 @@ def window_smoke(port: int = 0) -> dict:
     except ImportError as exc:
         raise RuntimeError("pywebview is not installed for native window validation.") from exc
 
+    def elapsed() -> float:
+        return round(time.monotonic() - _PROCESS_STARTED_MONOTONIC, 3)
+
+    timeline = {"t0_launcher_started": 0.0, "t1_backend_starting": elapsed()}
     app = create_desktop_app()
     from backend.app.config import APP_CACHE_DIR
 
     server = LocalDesktopServer(app, port=port)
     server.start()
-    result = {"loaded": False, "root_rendered": False, "url": ""}
+    timeline["t2_backend_ready"] = elapsed()
+    result = {
+        "loaded": False,
+        "root_rendered": False,
+        "interactive": False,
+        "url": "",
+        "runtime_origin": "",
+        "api_base_text": "",
+        "api_requests": [],
+        "all_api_requests_use_runtime_origin": False,
+        "interaction_hash": "",
+        "error": "",
+    }
     completed = threading.Event()
     window = webview.create_window(
         "Paneloom Desktop Smoke",
@@ -221,20 +251,92 @@ def window_smoke(port: int = 0) -> dict:
         min_size=(900, 600),
     )
 
+    def shown_window() -> None:
+        timeline.setdefault("t3_window_shown", elapsed())
+
+    def closed_window() -> None:
+        timeline.setdefault("t7_webview_closed", elapsed())
+
     def loaded_window() -> None:
         try:
             result["loaded"] = True
-            result["root_rendered"] = bool(
+            result["url"] = str(window.get_current_url() or "")
+            deadline = time.monotonic() + 15
+            ui_state = {}
+            while time.monotonic() < deadline:
+                ui_state = window.evaluate_js(
+                    """
+                    (() => ({
+                      rootRendered: Boolean(document.querySelector('#root')?.children.length),
+                      backendOnline: Boolean(document.querySelector('.status-pill.online')),
+                      apiBaseText: document.querySelector('.status-pill')?.parentElement?.querySelector('code')?.textContent || '',
+                      navReady: document.querySelectorAll('.nav-item').length >= 5,
+                      origin: window.location.origin,
+                      requests: performance.getEntriesByType('resource')
+                        .map((entry) => entry.name)
+                        .filter((url) => url.includes('/health') || url.includes('/projects')),
+                    }))()
+                    """
+                ) or {}
+                if (
+                    ui_state.get("rootRendered")
+                    and ui_state.get("backendOnline")
+                    and ui_state.get("navReady")
+                    and any(url.endswith("/projects") for url in ui_state.get("requests", []))
+                    and ui_state.get("apiBaseText")
+                ):
+                    break
+                time.sleep(0.1)
+
+            result["root_rendered"] = bool(ui_state.get("rootRendered"))
+            timeline["t4_react_first_render"] = elapsed()
+            result["runtime_origin"] = str(ui_state.get("origin") or "")
+            result["api_base_text"] = str(ui_state.get("apiBaseText") or "")
+            result["api_requests"] = list(ui_state.get("requests") or [])
+            runtime_prefix = f"{server.url}/"
+            result["all_api_requests_use_runtime_origin"] = bool(
+                result["api_requests"]
+                and all(url.startswith(runtime_prefix) for url in result["api_requests"])
+                and result["api_base_text"] == server.url
+                and result["runtime_origin"] == server.url
+            )
+
+            clicked = bool(
                 window.evaluate_js(
-                    "Boolean(document.querySelector('#root') && document.querySelector('#root').children.length)"
+                    """
+                    (() => {
+                      const button = document.querySelectorAll('.nav-item')[1];
+                      if (!button) return false;
+                      button.click();
+                      return true;
+                    })()
+                    """
                 )
             )
-            result["url"] = str(window.get_current_url() or "")
+            interaction_deadline = time.monotonic() + 5
+            while clicked and time.monotonic() < interaction_deadline:
+                result["interaction_hash"] = str(
+                    window.evaluate_js("window.location.hash") or ""
+                )
+                if result["interaction_hash"] == "#projects":
+                    break
+                time.sleep(0.05)
+            result["interactive"] = bool(
+                clicked
+                and result["interaction_hash"] == "#projects"
+                and result["all_api_requests_use_runtime_origin"]
+            )
+            timeline["t5_ui_interactive"] = elapsed()
+        except Exception as exc:  # pywebview surfaces browser failures as runtime exceptions.
+            result["error"] = str(exc)
         finally:
+            timeline["t6_close_requested"] = elapsed()
             completed.set()
             window.destroy()
 
+    window.events.shown += shown_window
     window.events.loaded += loaded_window
+    window.events.closed += closed_window
 
     def watchdog() -> None:
         if not completed.wait(timeout=60):
@@ -248,15 +350,30 @@ def window_smoke(port: int = 0) -> dict:
             private_mode=False,
             storage_path=str(APP_CACHE_DIR / "webview-smoke"),
         )
+        timeline.setdefault("t7_webview_closed", elapsed())
     finally:
         server.stop()
+        timeline["t8_backend_stopped"] = elapsed()
     return {
-        "ok": bool(result["loaded"] and result["root_rendered"]),
+        "ok": bool(
+            result["loaded"]
+            and result["root_rendered"]
+            and result["interactive"]
+            and result["all_api_requests_use_runtime_origin"]
+        ),
         "host": "127.0.0.1",
         "port": server.port,
         "window_loaded": result["loaded"],
         "react_root_rendered": result["root_rendered"],
+        "ui_interactive": result["interactive"],
         "url": result["url"],
+        "runtime_origin": result["runtime_origin"],
+        "api_base_text": result["api_base_text"],
+        "api_requests": result["api_requests"],
+        "all_api_requests_use_runtime_origin": result["all_api_requests_use_runtime_origin"],
+        "interaction_hash": result["interaction_hash"],
+        "error": result["error"],
+        "timeline_seconds": timeline,
         "server_stopped": not server.thread.is_alive(),
     }
 

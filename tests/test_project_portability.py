@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,6 +148,30 @@ class ProjectPortabilityTests(unittest.TestCase):
             project_service.resolve_project_path(restored_id, restored_shot["output_path"]).is_file()
         )
 
+    def test_corrupt_backup_is_rejected_without_registering_or_overwriting_a_project(self):
+        project, _, _ = self._create_complete_project("Corrupt Backup")
+        backup = project_portability_service.create_project_backup(project["project_id"])
+        source = Path(backup["backup_path"])
+        corrupt = self.root / "corrupt.paneloom.zip"
+        with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+            corrupt,
+            "w",
+            zipfile.ZIP_DEFLATED,
+        ) as damaged:
+            changed = False
+            for item in original.infolist():
+                content = original.read(item.filename)
+                if not changed and item.filename != project_portability_service.BACKUP_MANIFEST:
+                    content += b"controlled corruption"
+                    changed = True
+                damaged.writestr(item, content)
+
+        existing_ids = {item["project_id"] for item in project_service.list_projects()}
+        with self.assertRaisesRegex(ValueError, "(size|checksum) mismatch"):
+            project_portability_service.restore_project_backup(str(corrupt))
+        self.assertEqual(existing_ids, {item["project_id"] for item in project_service.list_projects()})
+        self.assertEqual(list(self.projects_home.glob(".*.restore-*")), [])
+
     def test_legacy_absolute_paths_migrate_idempotently_without_modifying_source(self):
         project_id = "legacy-project-1234"
         legacy_dir = self.legacy_projects / project_id
@@ -260,6 +285,62 @@ class ProjectPortabilityTests(unittest.TestCase):
             self.assertTrue(
                 project_service.resolve_project_path(project_id, shot["output_path"]).is_file()
             )
+
+    def test_interrupted_json_replacement_preserves_original_and_cleans_temporary_file(self):
+        project = project_service.create_project(ProjectCreate(name="Atomic Write"))
+        project_id = project["project_id"]
+        project_service.save_project_workspace(
+            project_id,
+            ProjectWorkspacePayload(script="stable workspace"),
+        )
+        workspace_path = project_service.get_project_dir(project_id) / "workspace.json"
+        original_workspace = workspace_path.read_bytes()
+
+        with patch("pathlib.Path.replace", side_effect=OSError("controlled replace failure")):
+            with self.assertRaises(OSError):
+                project_service.save_project_workspace(
+                    project_id,
+                    ProjectWorkspacePayload(script="must not replace stable workspace"),
+                )
+
+        self.assertEqual(workspace_path.read_bytes(), original_workspace)
+        self.assertEqual(json.loads(workspace_path.read_text(encoding="utf-8"))["script"], "stable workspace")
+        self.assertEqual(list(workspace_path.parent.glob(".workspace.json.*.tmp")), [])
+
+        shot = add_shot(project_id, ShotCreate(scene_id="ATOMIC", prompt="stable shot"))
+        shots_path = project_service.get_project_dir(project_id) / "shots.json"
+        original_shots = shots_path.read_bytes()
+        with patch("pathlib.Path.replace", side_effect=OSError("controlled replace failure")):
+            with self.assertRaises(OSError):
+                patch_shot(
+                    project_id,
+                    shot["shot_id"],
+                    ShotUpdate(prompt="must not replace stable shot"),
+                )
+        self.assertEqual(shots_path.read_bytes(), original_shots)
+        self.assertEqual(list(shots_path.parent.glob(".shots.json.*.tmp")), [])
+
+    def test_schema_defaults_and_unknown_fields_are_forward_tolerant(self):
+        project = project_service.create_project(ProjectCreate(name="Schema Compatibility"))
+        project_id = project["project_id"]
+        project_dir = project_service.get_project_dir(project_id)
+        config = json.loads((project_dir / "project_config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["schema_version"], project_service.SELF_CONTAINED_SCHEMA_VERSION)
+
+        workspace_path = project_dir / "workspace.json"
+        workspace_path.write_text(
+            json.dumps({"script": "old project", "unknown_future_field": {"kept": True}}),
+            encoding="utf-8",
+        )
+        loaded = project_service.get_project_workspace(project_id)
+        self.assertEqual(loaded["script"], "old project")
+        self.assertEqual(loaded["selected_aspects"], ["vertical_9_16"])
+        self.assertEqual(loaded["unknown_future_field"], {"kept": True})
+
+        validated = ProjectWorkspacePayload.model_validate(loaded)
+        saved = project_service.save_project_workspace(project_id, validated)
+        self.assertEqual(saved["script"], "old project")
+        self.assertEqual(saved["selected_aspects"], ["vertical_9_16"])
 
 
 if __name__ == "__main__":
