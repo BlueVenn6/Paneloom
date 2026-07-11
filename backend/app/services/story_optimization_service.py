@@ -27,6 +27,8 @@ Help the user improve a story before breaking it into panels.
 Return only valid JSON with these fields:
 logline, improved_script, recommended_panel_count, platform_recommendations,
 storyboard_strategy, revision_suggestions, risks.
+platform_recommendations, storyboard_strategy, and revision_suggestions must be arrays of strings.
+risks must be an array of objects shaped as {"risk": "...", "solution": "..."}.
 Keep the user's original intent and language. Do not mention copyrighted styles."""
 
 
@@ -161,11 +163,16 @@ def _normalize_result(
             data.get("revision_suggestions"),
             ai_fallback if source == "ai" else _local_revision_suggestions(payload.script),
         ),
-        "risks": _as_list(
+        "risks": _as_risk_list(
             data.get("risks"),
-            ai_fallback
+            []
             if source == "ai"
-            else ["Keep character and prop references fixed before generating panels."],
+            else [
+                {
+                    "risk": "Character or prop continuity may drift between panels.",
+                    "solution": "Lock reusable character, prop, and location references before generation.",
+                }
+            ],
         ),
         "warnings": warnings,
     }
@@ -185,8 +192,14 @@ def _local_optimization(payload: StoryOptimizationRequest) -> dict[str, Any]:
             "storyboard_strategy": _local_strategy(payload.script),
             "revision_suggestions": _local_revision_suggestions(payload.script),
             "risks": [
-                "Long abstract paragraphs should be converted into visible actions.",
-                "Recurring characters, props, and locations should be locked as references first.",
+                {
+                    "risk": "Long abstract paragraphs are difficult to visualize.",
+                    "solution": "Convert them into visible character actions and location changes.",
+                },
+                {
+                    "risk": "Recurring visual elements may drift.",
+                    "solution": "Lock character, prop, and location references first.",
+                },
             ],
         },
         payload,
@@ -242,3 +255,18 @@ def _as_list(value: Any, fallback: list[str]) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [line.strip("-• ").strip() for line in value.splitlines() if line.strip()]
     return fallback
+
+
+def _as_risk_list(value: Any, fallback: list[dict[str, str]]) -> list[dict[str, str]]:
+    values = value if isinstance(value, list) else [value] if value else []
+    normalized: list[dict[str, str]] = []
+    for item in values:
+        if isinstance(item, dict):
+            risk = str(item.get("risk") or item.get("issue") or "").strip()
+            solution = str(item.get("solution") or item.get("mitigation") or "").strip()
+        else:
+            risk = str(item or "").strip()
+            solution = ""
+        if risk:
+            normalized.append({"risk": risk, "solution": solution})
+    return normalized or fallback

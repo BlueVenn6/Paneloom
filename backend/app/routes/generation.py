@@ -8,6 +8,7 @@ from backend.app.models.schemas import (
     ApiResponse,
     BatchGenerateRequest,
     ImageGenerationRequest,
+    ReferenceAssetPlanRequest,
     ReferenceConceptRequest,
     ReferenceStyleAnalysisRequest,
 )
@@ -21,6 +22,7 @@ from backend.app.services.image_service import (
     generate_project_batch,
     generate_shot_image,
     list_reference_images,
+    plan_reference_assets,
     save_reference_image,
 )
 from backend.app.services.project_service import utc_now
@@ -140,11 +142,25 @@ def _run_reference_job(job_id: str, project_id: str, payload: ReferenceConceptRe
         }
     )
     try:
+        def report_progress(*, completed: int, failed: int, total: int, current: str) -> None:
+            job.update(
+                {
+                    "completed": completed,
+                    "failed_count": failed,
+                    "planned_total": total,
+                    "current_asset": current,
+                    "progress": "generating_reference_assets",
+                    "updated_at": utc_now(),
+                }
+            )
+
         result = generate_reference_concepts(
             project_id,
             script=payload.script,
             categories=payload.categories,
             refinement_prompt=payload.refinement_prompt,
+            plan=[item.model_dump() for item in payload.plan],
+            progress_callback=report_progress,
         )
         ok = result.get("status") in {"done", "partial"}
         job.update(
@@ -256,6 +272,7 @@ def generate_reference_concept_images(
             script=payload.script,
             categories=payload.categories,
             refinement_prompt=payload.refinement_prompt,
+            plan=[item.model_dump() for item in payload.plan],
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -263,6 +280,27 @@ def generate_reference_concept_images(
     return ApiResponse(
         ok=ok,
         message="Reference concepts generated." if ok else result.get("error", "reference_generation_failed"),
+        data=result,
+    )
+
+
+@router.post("/references/plan")
+def create_reference_asset_plan(
+    project_id: str,
+    payload: ReferenceAssetPlanRequest,
+) -> ApiResponse:
+    try:
+        result = plan_reference_assets(
+            project_id,
+            script=payload.script,
+            categories=payload.categories,
+            refinement_prompt=payload.refinement_prompt,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(
+        ok=bool(result.get("ok")),
+        message="Reference asset plan created." if result.get("ok") else result.get("error_message", "Asset planning failed."),
         data=result,
     )
 
@@ -288,6 +326,10 @@ def start_reference_concept_job(
         "error_message": "",
         "created_at": utc_now(),
         "updated_at": utc_now(),
+        "planned_total": len(payload.plan) or len(payload.categories),
+        "completed": 0,
+        "failed_count": 0,
+        "current_asset": "",
         "_started_monotonic": time.monotonic(),
     }
     _GENERATION_EXECUTOR.submit(_run_reference_job, job_id, project_id, payload)

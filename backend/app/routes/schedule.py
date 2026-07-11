@@ -8,6 +8,7 @@ from backend.app.models.schemas import (
     SocialFeedbackCreate,
     SocialFeedbackScreenshotRequest,
     TimeLogCreate,
+    ProjectActivityHeartbeat,
 )
 from backend.app.services.schedule_service import (
     add_social_feedback,
@@ -15,6 +16,7 @@ from backend.app.services.schedule_service import (
     generate_review,
     generate_schedule,
     get_schedule,
+    record_project_activity,
     update_task,
 )
 from backend.app.services.project_service import require_project
@@ -66,6 +68,15 @@ def post_time_log(project_id: str, payload: TimeLogCreate) -> ApiResponse:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Time logged.", data=row)
+
+
+@router.post("/activity")
+def post_project_activity(project_id: str, payload: ProjectActivityHeartbeat) -> ApiResponse:
+    try:
+        activity = record_project_activity(project_id, payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(ok=True, message="Project activity recorded.", data=activity)
 
 
 @router.post("/feedback")

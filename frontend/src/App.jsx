@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import Sidebar from "./components/Sidebar.jsx";
@@ -31,6 +31,7 @@ export default function App() {
   );
   const [projectError, setProjectError] = useState("");
   const [cloudAiAvailable, setCloudAiAvailable] = useState(() => navigator.onLine);
+  const lastInteractionRef = useRef(Date.now());
 
   function userFacingError(error) {
     const message = String(error?.message || error || "");
@@ -112,6 +113,28 @@ export default function App() {
     () => projects.find((project) => project.project_id === currentProjectId) || null,
     [projects, currentProjectId],
   );
+
+  useEffect(() => {
+    if (!currentProjectId) return undefined;
+    lastInteractionRef.current = Date.now();
+    const markActive = () => {
+      lastInteractionRef.current = Date.now();
+    };
+    window.addEventListener("pointerdown", markActive, true);
+    window.addEventListener("keydown", markActive, true);
+    const timer = window.setInterval(() => {
+      const recentlyActive = Date.now() - lastInteractionRef.current < 120_000;
+      if (document.visibilityState !== "visible" || !document.hasFocus() || !recentlyActive) return;
+      api
+        .recordProjectActivity(currentProjectId, { seconds: 30, page: activePage || "unknown" })
+        .catch(() => {});
+    }, 30_000);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pointerdown", markActive, true);
+      window.removeEventListener("keydown", markActive, true);
+    };
+  }, [currentProjectId, activePage]);
 
   const pageTitle = {
     dashboard: t("dashboard"),

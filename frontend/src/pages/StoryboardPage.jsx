@@ -252,6 +252,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   const [scriptForm, setScriptForm] = useState(defaultScriptForm);
   const [bible, setBible] = useState(defaultBible);
   const [referenceRefinement, setReferenceRefinement] = useState("");
+  const [referencePlan, setReferencePlan] = useState([]);
+  const [referenceJobProgress, setReferenceJobProgress] = useState(null);
   const [selectedReferences, setSelectedReferences] = useState([]);
   const [styleAnalysis, setStyleAnalysis] = useState("");
   const [editingShotId, setEditingShotId] = useState("");
@@ -277,6 +279,11 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   const shouldStopQueueRef = useRef(false);
   const workspaceSaveTimerRef = useRef(null);
   const workspaceLoadedProjectIdRef = useRef("");
+
+  useEffect(() => {
+    setReferencePlan([]);
+    setReferenceJobProgress(null);
+  }, [currentProject?.project_id]);
 
   function setShotProgressStage(shotId, stageKey, detail = "") {
     if (!shotId) return;
@@ -844,10 +851,32 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           await saveWorkspace({ script_import: nextImportInfo });
         }
       }
+      setMessage(t("planningReferenceAssets"));
+      const planResponse = await api.planReferenceAssets(currentProject.project_id, {
+        script: scriptForm.script,
+        categories,
+        refinement_prompt: referenceRefinement,
+      });
+      if (!planResponse.ok) return planResponse;
+      const nextPlan = Array.isArray(planResponse.data?.plan) ? planResponse.data.plan : [];
+      setReferencePlan(nextPlan);
+      setReferenceJobProgress({ completed: 0, failed: 0, total: nextPlan.length, current: "" });
+      if (nextPlan.length === 0) {
+        return { ok: false, message: t("referencePlanEmpty"), data: {} };
+      }
+      const confirmed = window.confirm(
+        `${t("referencePlanConfirmPrefix")} ${nextPlan.length} ${t("referencePlanConfirmSuffix")}\n\n${nextPlan
+          .map((item, index) => `${index + 1}. ${item.name} - ${item.purpose}`)
+          .join("\n")}`,
+      );
+      if (!confirmed) {
+        return { ok: true, localizedMessage: t("referencePlanReadyNotStarted"), data: {} };
+      }
       const startResponse = await api.startReferenceConceptJob(currentProject.project_id, {
         script: scriptForm.script,
         categories,
         refinement_prompt: referenceRefinement,
+        plan: nextPlan,
       });
       const jobId = startResponse.data?.job_id;
       if (!jobId) {
@@ -866,7 +895,17 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         if (job.status === "queued") {
           setMessage(`${t("referenceProgressQueued")} · ${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "running") {
-          setMessage(`${t("referenceProgressRunning")} · ${jobId} · ${job.duration_seconds || 0}s`);
+          setReferenceJobProgress({
+            completed: job.completed || 0,
+            failed: job.failed_count || 0,
+            total: job.planned_total || nextPlan.length,
+            current: job.current_asset || "",
+          });
+          setMessage(
+            `${t("referenceProgressRunning")} ${job.completed || 0}/${job.planned_total || nextPlan.length}` +
+              `${job.failed_count ? ` · ${t("referenceFailedCount")} ${job.failed_count}` : ""}` +
+              `${job.current_asset ? ` · ${job.current_asset}` : ""} · ${job.duration_seconds || 0}s`,
+          );
         } else if (job.status === "done" || job.status === "failed") {
           response = {
             ok: job.status === "done",
@@ -882,6 +921,12 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       }
       await refreshAll();
       const filenames = response.data?.references?.map((reference) => reference.filename) || [];
+      setReferenceJobProgress({
+        completed: response.data?.completed || filenames.length,
+        failed: response.data?.failed || 0,
+        total: response.data?.planned || nextPlan.length,
+        current: "",
+      });
       if (filenames.length > 0) {
         setSelectedReferences((current) => Array.from(new Set([...current, ...filenames])));
       }
@@ -1154,11 +1199,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       drawCover(context, image, x, y, cellWidth, cellHeight);
     }
 
-    const link = document.createElement("a");
-    link.download = `comic-grid-${gridAspect}.png`;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-      setMessage(t("exportGridPng"));
+    const blob = await new Promise((resolve, reject) =>
+      canvas.toBlob(
+        (value) => (value ? resolve(value) : reject(new Error(t("exportFailed")))),
+        "image/png",
+      ),
+    );
+    await saveBlobToDesktop(blob, `comic-grid-${gridAspect}.png`);
     } catch (error) {
       setMessage(`${t("exportFailed")} ${error.message}`);
     }
@@ -1179,7 +1226,14 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       api.exportProject(currentProject.project_id, format),
     );
     if (response?.data?.url) {
-      window.open(assetUrl(response.data.url), "_blank", "noreferrer");
+      try {
+        const exported = await fetch(assetUrl(response.data.url));
+        if (!exported.ok) throw new Error(`HTTP ${exported.status}`);
+        const filename = String(response.data.path || response.data.url).split(/[\\/]/).pop();
+        await saveBlobToDesktop(await exported.blob(), filename || `paneloom-export.${format}`);
+      } catch (error) {
+        setMessage(`${t("exportFailed")} ${error.message}`);
+      }
     }
   }
 
@@ -1322,16 +1376,46 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     );
   }
 
-  async function copyUrl(url) {
-    if (!url) return;
-    await navigator.clipboard.writeText(assetUrl(url));
-    setMessage(t("urlCopied"));
-  }
-
   async function copyText(text) {
     if (!text) return;
-    await navigator.clipboard.writeText(text);
-    setMessage(t("textCopied"));
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        if (!document.execCommand("copy")) throw new Error(t("textCopyFailed"));
+        field.remove();
+      }
+      setMessage(t("textCopied"));
+    } catch (error) {
+      setMessage(`${t("textCopyFailed")} ${error.message}`);
+    }
+  }
+
+  function shotTextForClipboard(shot) {
+    return [
+      `${t("sceneId")}: ${shot.scene_id || shot.shot_id}`,
+      shot.visual_description ? `${t("visualDescription")}: ${shot.visual_description}` : "",
+      shot.prompt ? `${t("prompt")}: ${shot.prompt}` : "",
+      shot.negative_prompt ? `${t("negativePrompt")}: ${shot.negative_prompt}` : "",
+      shot.revision_notes ? `${t("revisionNotes")}: ${shot.revision_notes}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function storyRiskParts(item) {
+    if (item && typeof item === "object") {
+      return { risk: String(item.risk || item.issue || ""), solution: String(item.solution || item.mitigation || "") };
+    }
+    const text = String(item || "");
+    const legacy = text.match(/["']risk["']\s*:\s*["']([\s\S]*?)["']\s*,\s*["']solution["']\s*:\s*["']([\s\S]*?)["']\s*\}?$/i);
+    return legacy ? { risk: legacy[1], solution: legacy[2] } : { risk: text, solution: "" };
   }
 
   function scriptBoardLines(text) {
@@ -1342,14 +1426,26 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       .filter(Boolean);
   }
 
-  function downloadTextFile(text, filename = "paneloom-script.txt") {
+  async function saveBlobToDesktop(blob, filename) {
+    if (!currentProject) return false;
+    try {
+      const response = await api.saveDesktopExport(currentProject.project_id, blob, filename);
+      if (!response.ok) {
+        setMessage(response.data?.cancelled ? t("saveCancelled") : response.message);
+        return false;
+      }
+      setMessage(`${t("fileSavedTo")} ${response.data?.path || filename}`);
+      return true;
+    } catch (error) {
+      setMessage(`${t("downloadFailed")} ${error.message}`);
+      return false;
+    }
+  }
+
+  async function downloadTextFile(text, filename = "paneloom-script.txt") {
     if (!text) return;
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(link.href);
+    await saveBlobToDesktop(blob, filename);
   }
 
   function openPreview(shot, output = null) {
@@ -1375,21 +1471,32 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       url: reference.url,
       title: reference.filename,
       filename: reference.filename,
-      sizeText: reference.category || "",
+      sizeText: referenceCategoryLabel(reference.category),
       version: reference.filename,
     });
+  }
+
+  function referenceCategoryLabel(category) {
+    const key = {
+      main_characters: "referenceAssetCategory_character_turnaround",
+      supporting_characters: "referenceAssetCategory_supporting_character",
+      locations: "referenceAssetCategory_location",
+      props: "referenceAssetCategory_prop",
+      style: "referenceAssetCategory_style",
+      character_turnaround: "referenceAssetCategory_character_turnaround",
+      character_expression_action: "referenceAssetCategory_character_expression_action",
+      supporting_character: "referenceAssetCategory_supporting_character",
+      location: "referenceAssetCategory_location",
+      prop: "referenceAssetCategory_prop",
+    }[category];
+    return key ? t(key) : "";
   }
 
   async function downloadImage(url, filename) {
     try {
       const response = await fetch(assetUrl(url));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const objectUrl = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = filename || "storyboard-image.png";
-      link.click();
-      URL.revokeObjectURL(objectUrl);
+      await saveBlobToDesktop(await response.blob(), filename || "storyboard-image.png");
     } catch (error) {
       setMessage(`${t("downloadFailed")} ${error.message}`);
     }
@@ -1589,9 +1696,19 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 <div>
                   <strong>{t("storyRisks")}</strong>
                   <ul>
-                    {storyAdvice.risks.map((item, index) => (
-                      <li key={`risk-${index}`}>{item}</li>
-                    ))}
+                    {storyAdvice.risks.map((item, index) => {
+                      const parts = storyRiskParts(item);
+                      return (
+                        <li key={`risk-${index}`}>
+                          <strong>{t("riskItemLabel")}:</strong> {parts.risk}
+                          {parts.solution && (
+                            <span className="risk-solution">
+                              <strong>{t("solutionItemLabel")}:</strong> {parts.solution}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}
@@ -1742,6 +1859,29 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 {busy === "reference-world" ? t("generatingWorldAssets") : t("generateWorldAssets")}
               </button>
             </div>
+            {referencePlan.length > 0 && (
+              <div className="reference-plan-panel">
+                <div className="archive-section-header">
+                  <strong>{t("referenceAssetPlan")}</strong>
+                  <span className="muted">
+                    {referenceJobProgress?.completed || 0}/{referenceJobProgress?.total || referencePlan.length}
+                    {referenceJobProgress?.failed
+                      ? ` · ${t("referenceFailedCount")} ${referenceJobProgress.failed}`
+                      : ""}
+                    {` · ${t("referenceConcurrency")} 2`}
+                  </span>
+                </div>
+                <div className="reference-plan-list">
+                  {referencePlan.map((item) => (
+                    <div key={item.asset_id}>
+                      <strong>{item.name}</strong>
+                      <span>{t(`referenceAssetCategory_${item.category}`)}</span>
+                      {item.purpose && <p>{item.purpose}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {references.length > 0 && (
               <div className="inline-reference-panel">
                 <strong>{t("generatedReferenceAssets")}</strong>
@@ -1759,7 +1899,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                             type="button"
                           >
                             <img alt={reference.filename} src={assetUrl(reference.url)} />
-                            <span>{reference.filename}</span>
+                            <span>{reference.name || reference.filename}</span>
+                            {reference.purpose && <small>{reference.purpose}</small>}
                           </button>
                           <div className="reference-actions">
                             <button
@@ -1972,7 +2113,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                         type="button"
                       >
                         <img alt={reference.filename} src={assetUrl(reference.url)} />
-                        <span>{reference.filename}</span>
+                        <span>{reference.name || reference.filename}</span>
+                        {reference.purpose && <small>{reference.purpose}</small>}
                       </button>
                       <div className="reference-actions">
                         <button
@@ -2045,7 +2187,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
               </div>
               <div className="queue-stats">
                 <span>
-                  {t("concurrency")} <strong>1</strong>
+                  {t("storyboardConcurrency")} <strong>1</strong>
                 </span>
                 <span>
                   {t("queueable")} <strong>{queueableShots.length}</strong>
@@ -2391,6 +2533,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                             {t("editShot")}
                           </button>
                           <button
+                            className="secondary"
+                            onClick={() => copyText(shotTextForClipboard(shot))}
+                            type="button"
+                          >
+                            {t("copyStoryboardText")}
+                          </button>
+                          <button
                             className={`secondary ${shot.locked ? "" : "danger"}`}
                             onClick={() => handleShotLock(shot)}
                             title={shot.locked ? t("unlockShot") : t("approveAndLock")}
@@ -2484,7 +2633,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                         type="button"
                       >
                         <img alt={reference.filename} src={assetUrl(reference.url)} />
-                        <span>{reference.filename}</span>
+                        <span>{reference.name || reference.filename}</span>
+                        {reference.purpose && <small>{reference.purpose}</small>}
                       </button>
                       <div className="reference-actions">
                         <button
@@ -2563,7 +2713,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 </select>
               </label>
               <label>
-                <span>{t("columns")}</span>
+                <span>{t("imagesPerRow")}</span>
                 <input
                   min="1"
                   max="4"
@@ -2571,6 +2721,9 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                   value={gridColumns}
                   onChange={(event) => setGridColumns(event.target.value)}
                 />
+                <small className="muted">
+                  {t("gridExportSummary")} {generatedShots.length} · {t("gridRows")} {Math.ceil(generatedShots.length / Math.max(1, Number(gridColumns) || 1))}
+                </small>
               </label>
               <button className="primary" onClick={exportComicGridPng} type="button">
                 {t("exportGridPng")}
@@ -2600,20 +2753,6 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 type="button"
               >
                 {t("downloadImage")}
-              </button>
-              <button
-                className="secondary"
-                onClick={() => window.open(assetUrl(previewImage.url), "_blank", "noreferrer")}
-                type="button"
-              >
-                {t("openImage")}
-              </button>
-              <button
-                className="secondary"
-                onClick={() => copyUrl(previewImage.url)}
-                type="button"
-              >
-                {t("copyImageUrl")}
               </button>
             </div>
           </div>

@@ -75,6 +75,7 @@ const emptySchedule = () => ({
   plan: {},
   tasks: [],
   time_logs: [],
+  activity: { total_seconds: 0, by_date: {}, by_page: {} },
   feedback: [],
   reviews: {},
   project_progress: [],
@@ -92,6 +93,9 @@ function normalizeSchedule(value) {
     plan: data.plan && typeof data.plan === "object" && !Array.isArray(data.plan) ? data.plan : {},
     tasks: Array.isArray(data.tasks) ? data.tasks : [],
     time_logs: Array.isArray(data.time_logs) ? data.time_logs : [],
+    activity: data.activity && typeof data.activity === "object"
+      ? data.activity
+      : { total_seconds: 0, by_date: {}, by_page: {} },
     feedback: Array.isArray(data.feedback) ? data.feedback : [],
     reviews: data.reviews && typeof data.reviews === "object" ? data.reviews : {},
     project_progress: Array.isArray(data.project_progress) ? data.project_progress : [],
@@ -151,6 +155,15 @@ export default function SchedulePage({ currentProject }) {
     refreshSchedule().catch((error) => setMessage(error.message));
   }, [currentProject?.project_id]);
 
+  useEffect(() => {
+    if (!currentProject) return undefined;
+    const timer = window.setInterval(
+      () => refreshSchedule().catch(() => {}),
+      15_000,
+    );
+    return () => window.clearInterval(timer);
+  }, [currentProject?.project_id]);
+
   const dueTasks = useMemo(
     () =>
       schedule.tasks.filter(
@@ -173,10 +186,11 @@ export default function SchedulePage({ currentProject }) {
     const done = progress.length
       ? progress.filter((item) => item.status === "done").length
       : schedule.tasks.filter((task) => task.status === "done").length;
-    const tracked = schedule.time_logs.reduce(
+    const manuallyTracked = schedule.time_logs.reduce(
       (sum, row) => sum + Number(row.minutes || 0),
       0,
     );
+    const automaticSeconds = Number(schedule.activity?.total_seconds || 0);
     const latestFeedback = latestFeedbackSnapshots(schedule.feedback);
     const views = latestFeedback.reduce((sum, row) => sum + Number(row.views || 0), 0);
     const conversions = latestFeedback.reduce(
@@ -187,7 +201,16 @@ export default function SchedulePage({ currentProject }) {
     return {
       total,
       done,
-      trackedHours: Math.round((tracked / 60) * 10) / 10,
+      trackedHours: automaticSeconds > 0
+        ? Math.round((automaticSeconds / 3600) * 10) / 10
+        : Math.round((manuallyTracked / 60) * 10) / 10,
+      trackedDisplay: automaticSeconds > 0 && automaticSeconds < 3600
+        ? `${Math.max(1, Math.round(automaticSeconds / 60))}m`
+        : `${automaticSeconds > 0
+          ? Math.round((automaticSeconds / 3600) * 10) / 10
+          : Math.round((manuallyTracked / 60) * 10) / 10}h`,
+      automaticMinutes: Math.round(automaticSeconds / 60),
+      manualMinutes: manuallyTracked,
       views,
       conversions,
       revenue: Math.round(revenue * 100) / 100,
@@ -358,8 +381,11 @@ export default function SchedulePage({ currentProject }) {
         </div>
         <div className="panel stat-card">
           <span>{t("tracked")}</span>
-          <strong>{stats.trackedHours}h</strong>
-          <small>{t("loggedWorkTime")}</small>
+          <strong>{stats.trackedDisplay}</strong>
+          <small>
+            {t("automaticActiveTime")} {stats.automaticMinutes}m
+            {stats.manualMinutes > 0 ? ` · ${t("manualLoggedTime")} ${stats.manualMinutes}m` : ""}
+          </small>
         </div>
         <div className="panel stat-card">
           <span>{t("feedback")}</span>

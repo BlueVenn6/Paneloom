@@ -143,6 +143,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  planReferenceAssets: (projectId, payload) =>
+    request(`/projects/${projectId}/generate/references/plan`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getReferenceConceptJob: (projectId, jobId) =>
     request(`/projects/${projectId}/generate/references/jobs/${jobId}`),
   analyzeReferenceStyle: (projectId, payload) =>
@@ -179,6 +184,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  recordProjectActivity: (projectId, payload) =>
+    request(`/projects/${projectId}/schedule/activity`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   addSocialFeedback: (projectId, payload) =>
     request(`/projects/${projectId}/schedule/feedback`, {
       method: "POST",
@@ -206,4 +216,14 @@ export const api = {
     request("/settings", { method: "POST", body: JSON.stringify(payload) }),
   testSettings: (payload) =>
     request("/settings/test", { method: "POST", body: JSON.stringify(payload) }),
+  testTextSettings: (payload, signal) =>
+    request("/settings/test/text", { method: "POST", body: JSON.stringify(payload), signal }),
+  testImageSettings: (payload, signal) =>
+    request("/settings/test/image", { method: "POST", body: JSON.stringify(payload), signal }),
+  saveDesktopExport: (projectId, blob, suggestedFilename) => {
+    const body = new FormData();
+    body.append("file", blob, suggestedFilename);
+    body.append("suggested_filename", suggestedFilename);
+    return request(`/projects/${projectId}/desktop-save`, { method: "POST", body });
+  },
 };

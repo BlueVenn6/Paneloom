@@ -7,7 +7,7 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
@@ -17,6 +17,7 @@ from backend.app.config import (
     get_text_api_config,
     is_offline_mode,
     validate_api_settings,
+    validate_text_settings,
 )
 from backend.app.models.schemas import ImageGenerationRequest
 from backend.app.security import redact_sensitive_value
@@ -45,13 +46,24 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.openai_image_client import edit_image, generate_image  # noqa: E402
-from api.openai_text_client import generate_text_with_image  # noqa: E402
+from api.openai_text_client import generate_text, generate_text_with_image  # noqa: E402
 
 _GENERATION_LOCKS: dict[str, Lock] = {}
 _LOG_LOCKS: dict[str, Lock] = {}
+_IMAGE_PROVIDER_SLOTS = BoundedSemaphore(2)
 REFERENCE_EDIT_MAX_SIDE = 768
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 REFERENCE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+
+
+def _bounded_generate_image(*args, **kwargs):
+    with _IMAGE_PROVIDER_SLOTS:
+        return generate_image(*args, **kwargs)
+
+
+def _bounded_edit_image(*args, **kwargs):
+    with _IMAGE_PROVIDER_SLOTS:
+        return edit_image(*args, **kwargs)
 # Reference generation must upload the selected image to the provider. If this
 # endpoint is unavailable, fail visibly instead of pretending text-only generation
 # used the image.
@@ -220,41 +232,6 @@ def _direct_reference_prompt_note(reference_paths: list[Path]) -> str:
     )
 
 
-def _should_fallback_to_generation(result: dict) -> bool:
-    error_code = str(result.get("error_code") or result.get("short_error") or "").lower()
-    error_message = str(result.get("error_message") or result.get("exception_message") or "").lower()
-    status_code = str(result.get("status_code") or "")
-    return (
-        status_code in {"408", "504", "524"}
-        or "request_timeout" in error_code
-        or "timeout" in error_message
-        or "cloudflare 524" in error_message
-    )
-
-
-def _should_retry_compact_generation(result: dict) -> bool:
-    return _should_fallback_to_generation(result)
-
-
-def _compact_retry_failure_message(first_result: dict, retry_result: dict) -> str:
-    first_message = (
-        first_result.get("error_message")
-        or first_result.get("error")
-        or first_result.get("short_error")
-        or "provider_timeout"
-    )
-    retry_message = (
-        retry_result.get("error_message")
-        or retry_result.get("error")
-        or retry_result.get("short_error")
-        or "provider_timeout"
-    )
-    return (
-        "已按同尺寸/同质量精简提示词重试，仍未返回图片："
-        f"{retry_message} 首次失败：{first_message}"
-    )
-
-
 def _reference_edit_failure_message(result: dict) -> str:
     status_code = str(result.get("status_code") or "")
     message = (
@@ -270,49 +247,6 @@ def _reference_edit_failure_message(result: dict) -> str:
             "或等价图片参考接口能稳定完成。"
         )
     return f"参考图上传生成失败：{message}"
-
-
-def _compact_generation_prompt(
-    *,
-    shot: dict,
-    visual_format: str,
-    panel_gutter_style: str,
-    size_item: dict,
-    reference_paths: list[Path],
-    visual_style: str,
-) -> str:
-    scene = shot.get("visual_description") or shot.get("revision_notes") or shot.get("prompt") or ""
-    scene = str(scene).strip()
-    if len(scene) > 420:
-        scene = f"{scene[:420].rstrip()}..."
-    if visual_format == "webtoon_strip" and panel_gutter_style == "seamless":
-        format_note = "Create one seamless vertical comic strip image with 3 stacked story beats, no white gutters, no panel borders, no text."
-    elif visual_format == "webtoon_strip":
-        format_note = "Create one vertical comic strip image with 3 stacked manga panels, uniform visible gutters and borders, no text."
-    else:
-        format_note = "Create one single manga comic panel, no text."
-    reference_note = ""
-    if reference_paths:
-        names = ", ".join(path.stem for path in reference_paths)
-        reference_note = (
-            f" Use project reference style anchors named {names}; keep character look, costumes, props, "
-            "line art, and visual mood consistent."
-        )
-    style = str(visual_style or "").strip()
-    if style:
-        style_note = (
-            "STYLE LOCK - mandatory: use exactly this project visual style and no other preset: "
-            f"{style}. Do not switch to black-and-white, grayscale, monochrome ink, noir, or retro manga "
-            "unless those words are explicitly in the STYLE LOCK."
-        )
-    else:
-        style_note = "Style: polished comic storyboard, consistent project visual identity."
-    return (
-        f"{format_note} Story beat: {scene} {reference_note} "
-        f"{style_note} "
-        f"Negative: watermark, random text, logo, speech bubbles, bad anatomy. "
-        f"Design for final aspect {size_item.get('label', '')}."
-    )
 
 
 def _optimized_reference_paths(project_id: str, reference_paths: list[Path]) -> list[Path]:
@@ -729,7 +663,7 @@ def _generate_shot_image_locked(
         size_prompt = f"{prompt}\n\n{_target_aspect_note(size_item)}"
         provider_size = size_item.get("generation_size") or size_item["size"]
         if edit_reference_paths and USE_DIRECT_REFERENCE_EDIT:
-            result = edit_image(
+            result = _bounded_edit_image(
                 settings,
                 prompt=size_prompt,
                 image_path=edit_reference_paths,
@@ -743,41 +677,13 @@ def _generate_shot_image_locked(
             direct_reference_note = _direct_reference_prompt_note(reference_paths)
             if direct_reference_note:
                 size_prompt = f"{size_prompt}\n\n{direct_reference_note}"
-            result = generate_image(
+            result = _bounded_generate_image(
                 settings,
                 prompt=size_prompt,
                 size=provider_size,
                 quality=request.quality if request else None,
                 output_path=output_path,
             )
-            if not result.get("ok") and _should_retry_compact_generation(result):
-                compact_prompt = _compact_generation_prompt(
-                    shot=shot,
-                    visual_format=visual_format,
-                    panel_gutter_style=panel_gutter_style,
-                    size_item=size_item,
-                    reference_paths=reference_paths,
-                    visual_style=project_bible.get("visual_style", ""),
-                )
-                compact_result = generate_image(
-                    settings,
-                    prompt=compact_prompt,
-                    size=provider_size,
-                    quality=request.quality if request else None,
-                    output_path=output_path,
-                )
-                compact_result["compact_retry"] = True
-                compact_result["compact_retry_reason"] = (
-                    result.get("error_message")
-                    or result.get("error")
-                    or result.get("short_error")
-                    or "provider_timeout"
-                )
-                if compact_result.get("ok"):
-                    result = compact_result
-                else:
-                    compact_result["error_message"] = _compact_retry_failure_message(result, compact_result)
-                    result = compact_result
         result["aspect_preset"] = size_item["id"]
         result["aspect_label"] = size_item["label"]
         result["target_size"] = size_item["size"]
@@ -1087,6 +993,10 @@ def delete_reference_image(project_id: str, filename: str) -> dict:
             },
         )
     path.unlink()
+    metadata = _read_reference_metadata(project_id)
+    if safe_name in metadata:
+        metadata.pop(safe_name, None)
+        _write_reference_metadata(project_id, metadata)
     return {"filename": safe_name, "deleted": True, "dependencies_updated": True}
 
 
@@ -1095,16 +1005,57 @@ def list_reference_images(project_id: str) -> list[dict]:
     directory = get_project_reference_dir(project_id)
     if not directory.exists():
         return []
+    metadata = _read_reference_metadata(project_id)
     return [
         {
             "filename": path.name,
             "path": to_project_relative_path(project_id, path),
             "url": project_file_url(project_id, "references", path.name),
             "category": _reference_category_from_filename(path.name),
+            **metadata.get(path.name, {}),
         }
         for path in sorted(directory.iterdir())
         if path.is_file()
     ]
+
+
+def _reference_metadata_path(project_id: str) -> Path:
+    return get_project_dir(project_id) / "metadata" / "reference_assets.json"
+
+
+def _read_reference_metadata(project_id: str) -> dict:
+    path = _reference_metadata_path(project_id)
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_reference_metadata(project_id: str, metadata: dict) -> None:
+    path = _reference_metadata_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _record_reference_metadata(project_id: str, references: list[dict]) -> None:
+    if not references:
+        return
+    metadata = _read_reference_metadata(project_id)
+    for reference in references:
+        metadata[reference["filename"]] = {
+            key: reference.get(key, "")
+            for key in ("category", "name", "purpose", "asset_id")
+            if reference.get(key)
+        }
+    _write_reference_metadata(project_id, metadata)
 
 
 def _reference_category_from_filename(filename: str) -> str:
@@ -1290,11 +1241,111 @@ def analyze_reference_style(
     }
 
 
+def plan_reference_assets(
+    project_id: str,
+    script: str = "",
+    categories: list[str] | None = None,
+    refinement_prompt: str = "",
+) -> dict:
+    require_project(project_id)
+    if is_offline_mode():
+        return {"ok": False, "error": "offline_mode", "error_message": "Cloud AI is unavailable in offline mode.", "plan": []}
+    settings = get_active_settings(include_secret=True)
+    errors = validate_text_settings(settings)
+    if errors:
+        return {"ok": False, "error": "configuration_error", "error_message": " ".join(errors), "plan": []}
+    bible = get_project_bible(project_id)
+    requested = categories or ["main_characters", "supporting_characters", "locations", "props"]
+    response = generate_text(
+        get_text_api_config(settings),
+        system_prompt=(
+            "You are a production asset planner for manga and animation. Return only valid JSON with an assets array. "
+            "Each asset must have asset_id, category, name, purpose, image_prompt. Allowed categories: "
+            "character_turnaround, character_expression_action, supporting_character, location, prop, style. "
+            "Display name and purpose in the source script language. image_prompt may be English."
+        ),
+        user_prompt=(
+            f"Requested groups: {json.dumps(requested, ensure_ascii=False)}\n"
+            f"Project bible: {json.dumps(bible, ensure_ascii=False)}\n"
+            f"Script: {script[:12000]}\n"
+            f"User refinement: {refinement_prompt}\n\n"
+            "Choose only assets that materially improve visual continuity, with 1 to 8 images total. "
+            "For each core named character, normally plan a clean turnaround/model sheet and, when useful, a separate expression/action sheet. "
+            "Plan important locations as clean reusable environment references and recurring props as isolated object references. "
+            "Do not plan narrative storyboards, sequential scenes, poster art, or mixed story collages. "
+            "Every image_prompt must state that this is a production reference asset, use a neutral readable layout, no story sequence, no captions, and no readable text."
+        ),
+        temperature=0.1,
+        max_output_tokens=1800,
+    )
+    if not response.get("ok"):
+        return {
+            "ok": False,
+            "error": response.get("error", "asset_plan_failed"),
+            "error_message": response.get("exception_message") or "Asset planning request failed.",
+            "plan": [],
+        }
+    parsed = _parse_style_json(response.get("text", ""))
+    raw_assets = parsed.get("assets") if isinstance(parsed, dict) else None
+    allowed = {
+        "character_turnaround",
+        "character_expression_action",
+        "supporting_character",
+        "location",
+        "prop",
+        "style",
+    }
+    requested_allowed: set[str] = set()
+    request_map = {
+        "main_characters": {"character_turnaround", "character_expression_action"},
+        "supporting_characters": {"supporting_character"},
+        "locations": {"location"},
+        "props": {"prop"},
+        "style": {"style"},
+    }
+    for group in requested:
+        requested_allowed.update(request_map.get(group, set()))
+    plan: list[dict] = []
+    for index, item in enumerate(raw_assets if isinstance(raw_assets, list) else [], 1):
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        name = str(item.get("name") or "").strip()
+        prompt = str(item.get("image_prompt") or "").strip()
+        if category not in allowed or category not in requested_allowed or not name or not prompt:
+            continue
+        asset_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(item.get("asset_id") or f"asset-{index}")).strip("-")
+        plan.append(
+            {
+                "asset_id": (asset_id or f"asset-{index}")[:80],
+                "category": category,
+                "name": name[:120],
+                "purpose": str(item.get("purpose") or "").strip()[:500],
+                "image_prompt": prompt[:5000],
+            }
+        )
+        if len(plan) >= 8:
+            break
+    if not plan:
+        return {"ok": False, "error": "invalid_asset_plan", "error_message": "Text model did not return a usable asset plan.", "plan": []}
+    return {
+        "ok": True,
+        "source": "ai",
+        "provider": get_text_api_config(settings).get("provider", ""),
+        "model": get_text_api_config(settings).get("model", ""),
+        "plan": plan,
+        "count": len(plan),
+        "concurrency": 2,
+    }
+
+
 def generate_reference_concepts(
     project_id: str,
     script: str = "",
     categories: list[str] | None = None,
     refinement_prompt: str = "",
+    plan: list[dict] | None = None,
+    progress_callback=None,
 ) -> dict:
     require_project(project_id)
     if is_offline_mode():
@@ -1326,10 +1377,11 @@ def generate_reference_concepts(
     references: list[dict] = []
     errors: list[str] = []
 
-    def generate_category(category: str, prompt: str) -> tuple[dict | None, str]:
-        filename = f"project-reference-{category}-{_generation_stamp()}.png"
+    def generate_category(category: str, prompt: str, plan_item: dict | None = None) -> tuple[dict | None, str]:
+        asset_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", str((plan_item or {}).get("asset_id") or category)).strip("-")
+        filename = f"project-reference-{category}-{asset_id}-{_generation_stamp()}.png"
         output_path = output_dir / filename
-        result = generate_image(
+        result = _bounded_generate_image(
             settings,
             prompt=prompt,
             size="1024x1024",
@@ -1343,6 +1395,9 @@ def generate_reference_concepts(
                     "path": to_project_relative_path(project_id, output_path),
                     "url": project_file_url(project_id, "references", filename),
                     "category": category,
+                    "name": (plan_item or {}).get("name", category),
+                    "purpose": (plan_item or {}).get("purpose", ""),
+                    "asset_id": (plan_item or {}).get("asset_id", asset_id),
                 },
                 "",
             )
@@ -1374,16 +1429,45 @@ def generate_reference_concepts(
         )
         return None, f"{category}: {detail}"
 
-    work = [(category, prompts.get(category)) for category in categories if prompts.get(category)]
+    work = (
+        [
+            (str(item.get("category") or "asset"), str(item.get("image_prompt") or ""), item)
+            for item in (plan or [])
+            if item.get("image_prompt")
+        ]
+        if plan
+        else [(category, prompts.get(category), None) for category in categories if prompts.get(category)]
+    )
+    if progress_callback:
+        progress_callback(completed=0, failed=0, total=len(work), current="")
     with ThreadPoolExecutor(max_workers=min(2, max(1, len(work)))) as executor:
-        futures = {executor.submit(generate_category, category, prompt): category for category, prompt in work}
+        futures = {
+            executor.submit(generate_category, category, prompt, item): item or {"name": category}
+            for category, prompt, item in work
+        }
+        completed = 0
+        failed = 0
         for future in as_completed(futures):
             reference, error = future.result()
             if reference:
                 references.append(reference)
             if error:
                 errors.append(error)
-    references.sort(key=lambda item: categories.index(item["category"]))
+                failed += 1
+            completed += 1
+            if progress_callback:
+                progress_callback(
+                    completed=completed,
+                    failed=failed,
+                    total=len(work),
+                    current=str(futures[future].get("name") or ""),
+                )
+    order = {str(item.get("asset_id")): index for index, item in enumerate(plan or [])}
+    if plan:
+        references.sort(key=lambda item: order.get(str(item.get("asset_id")), len(order)))
+    else:
+        references.sort(key=lambda item: categories.index(item["category"]))
+    _record_reference_metadata(project_id, references)
 
     return {
         "project_id": project_id,
@@ -1392,6 +1476,9 @@ def generate_reference_concepts(
         "errors": errors,
         "error": "" if references else "reference_generation_failed",
         "error_message": "" if references else "; ".join(errors),
+        "planned": len(work),
+        "completed": len(references),
+        "failed": len(errors),
     }
 
 
@@ -1517,7 +1604,7 @@ def edit_shot_with_reference(
     timestamp = utc_now()
     filename = f"{shot_id}-edit-{version_stamp}.png"
     output_path = output_dir / filename
-    result = edit_image(
+    result = _bounded_edit_image(
         settings,
         prompt=prompt,
         image_path=reference_path,

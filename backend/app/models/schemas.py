@@ -183,6 +183,11 @@ class TimeLogCreate(BaseModel):
     notes: str = ""
 
 
+class ProjectActivityHeartbeat(BaseModel):
+    seconds: int = Field(..., ge=1, le=60)
+    page: Literal["dashboard", "projects", "storyboard", "schedule", "settings", "unknown"] = "unknown"
+
+
 class SocialFeedbackCreate(BaseModel):
     content_id: str = ""
     platform: str = Field(..., min_length=1)
@@ -268,6 +273,21 @@ class ImageGenerationRequest(BaseModel):
     panel_gutter_style: Literal["framed", "seamless"] = "framed"
 
 
+class ReferenceAssetPlanItem(BaseModel):
+    asset_id: str = Field(..., min_length=1, max_length=80)
+    category: Literal[
+        "character_turnaround",
+        "character_expression_action",
+        "supporting_character",
+        "location",
+        "prop",
+        "style",
+    ]
+    name: str = Field(..., min_length=1, max_length=120)
+    purpose: str = Field(default="", max_length=500)
+    image_prompt: str = Field(..., min_length=1, max_length=5000)
+
+
 class ReferenceConceptRequest(BaseModel):
     script: str = ""
     categories: list[
@@ -275,6 +295,15 @@ class ReferenceConceptRequest(BaseModel):
     ] = Field(
         default_factory=lambda: ["main_characters", "supporting_characters", "locations", "props"],
     )
+    refinement_prompt: str = ""
+    plan: list[ReferenceAssetPlanItem] = Field(default_factory=list, max_length=12)
+
+
+class ReferenceAssetPlanRequest(BaseModel):
+    script: str = ""
+    categories: list[
+        Literal["main_characters", "supporting_characters", "locations", "props", "style"]
+    ] = Field(default_factory=list)
     refinement_prompt: str = ""
 
 

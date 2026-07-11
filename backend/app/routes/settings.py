@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException
@@ -21,6 +22,8 @@ from api.openai_image_client import generate_image
 from api.openai_text_client import generate_text
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+_TEXT_TEST_LOCK = Lock()
+_IMAGE_TEST_LOCK = Lock()
 
 
 def _merge_existing_secret(payload: SettingsPayload) -> dict:
@@ -66,12 +69,7 @@ def post_settings(payload: SettingsPayload) -> ApiResponse:
 
 @router.post("/test")
 def test_settings(payload: SettingsPayload | None = None) -> ApiResponse:
-    if payload:
-        settings = normalize_settings(_merge_existing_secret(payload))
-        source = "request"
-    else:
-        settings = get_active_settings(include_secret=True)
-        source = settings.get("source", "active")
+    settings, source = _settings_for_test(payload)
 
     image_errors = validate_api_settings(settings)
     text_errors = validate_text_settings(settings)
@@ -98,6 +96,57 @@ def test_settings(payload: SettingsPayload | None = None) -> ApiResponse:
         message="Real provider tests completed.",
         data={"source": source, "image": image_result, "text": text_result},
     )
+
+
+@router.post("/test/text")
+def test_text_settings(payload: SettingsPayload | None = None) -> ApiResponse:
+    settings, source = _settings_for_test(payload)
+    errors = validate_text_settings(settings)
+    if not _TEXT_TEST_LOCK.acquire(blocking=False):
+        result = {"ok": False, "status": "busy", "errors": ["A text provider test is already running."]}
+    else:
+        try:
+            result = (
+                {"ok": False, "status": "failed", "errors": errors}
+                if errors
+                else _test_text_inference(get_text_api_config(settings))
+            )
+        finally:
+            _TEXT_TEST_LOCK.release()
+    return ApiResponse(
+        ok=bool(result.get("ok")),
+        message="Text provider test completed.",
+        data={"source": source, **result},
+    )
+
+
+@router.post("/test/image")
+def test_image_settings(payload: SettingsPayload | None = None) -> ApiResponse:
+    settings, source = _settings_for_test(payload)
+    errors = validate_api_settings(settings)
+    if not _IMAGE_TEST_LOCK.acquire(blocking=False):
+        result = {"ok": False, "status": "busy", "errors": ["An image provider test is already running."]}
+    else:
+        try:
+            result = (
+                {"ok": False, "status": "failed", "errors": errors}
+                if errors
+                else _test_image_generation(settings)
+            )
+        finally:
+            _IMAGE_TEST_LOCK.release()
+    return ApiResponse(
+        ok=bool(result.get("ok")),
+        message="Image provider test completed.",
+        data={"source": source, **result},
+    )
+
+
+def _settings_for_test(payload: SettingsPayload | None) -> tuple[dict, str]:
+    if payload:
+        return normalize_settings(_merge_existing_secret(payload)), "request"
+    settings = get_active_settings(include_secret=True)
+    return settings, settings.get("source", "active")
 
 def _test_text_inference(config: dict) -> dict:
     started = perf_counter()

@@ -60,6 +60,49 @@
   border-color: #a34d58;
 }
 
+.connection-result.testing {
+  border-color: #7f6a35;
+  background: #1e1b13;
+}
+
+.risk-solution {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.reference-plan-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: #10151d;
+}
+
+.reference-plan-list {
+  display: grid;
+  gap: 8px;
+}
+
+.reference-plan-list > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(140px, 0.8fr);
+  gap: 6px 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+}
+
+.reference-plan-list p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+}
+
+.reference-tile small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .connection-result span,
 .connection-result small,
 .connection-result p {

@@ -8,7 +8,7 @@ from typing import Any
 import requests
 
 
-IMAGE_REQUEST_TIMEOUT_SECONDS = 600
+IMAGE_REQUEST_TIMEOUT_SECONDS = 240
 
 
 def _headers(api_key: str) -> dict[str, str]:

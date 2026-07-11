@@ -13,6 +13,7 @@ from backend.app.models.schemas import (
     ScheduleTaskUpdate,
     SocialFeedbackCreate,
     TimeLogCreate,
+    ProjectActivityHeartbeat,
 )
 from backend.app.services.project_service import (
     get_project_bible,
@@ -84,6 +85,7 @@ def get_schedule(project_id: str) -> dict:
         "plan": _read_json(_schedule_path(project_id), {}),
         "tasks": _read_json(_tasks_path(project_id), []),
         "time_logs": _read_csv(_time_log_path(project_id)),
+        "activity": _read_json(_activity_path(project_id), _empty_activity()),
         "feedback": _read_csv(_feedback_path(project_id)),
         "reviews": {
             "week": _read_json(_review_path(project_id, "week"), {}),
@@ -91,6 +93,34 @@ def get_schedule(project_id: str) -> dict:
         },
         "project_progress": _project_progress(project_id),
     }
+
+
+def _empty_activity() -> dict:
+    return {"total_seconds": 0, "by_date": {}, "by_page": {}, "by_date_page": {}, "updated_at": ""}
+
+
+def record_project_activity(project_id: str, payload: ProjectActivityHeartbeat) -> dict:
+    require_project(project_id)
+    activity = _read_json(_activity_path(project_id), _empty_activity())
+    today = datetime.now().astimezone().date().isoformat()
+    seconds = int(payload.seconds)
+    by_date = dict(activity.get("by_date") or {})
+    by_page = dict(activity.get("by_page") or {})
+    by_date_page = dict(activity.get("by_date_page") or {})
+    by_date[today] = int(by_date.get(today) or 0) + seconds
+    by_page[payload.page] = int(by_page.get(payload.page) or 0) + seconds
+    today_pages = dict(by_date_page.get(today) or {})
+    today_pages[payload.page] = int(today_pages.get(payload.page) or 0) + seconds
+    by_date_page[today] = today_pages
+    activity = {
+        "total_seconds": int(activity.get("total_seconds") or 0) + seconds,
+        "by_date": by_date,
+        "by_page": by_page,
+        "by_date_page": by_date_page,
+        "updated_at": utc_now(),
+    }
+    _write_json(_activity_path(project_id), activity)
+    return activity
 
 
 def _project_progress(project_id: str) -> list[dict]:
@@ -162,7 +192,7 @@ def _project_progress(project_id: str) -> list[dict]:
             len(shots),
             "shot_lock_state",
         ),
-        stage("export", "done" if export_count else "todo", export_count, 1, f"exports:{export_count}"),
+        stage("export", "done" if export_count else "todo", int(export_count > 0), 1, f"exports:{export_count}"),
     ]
 
 
@@ -309,9 +339,24 @@ def generate_review(project_id: str, payload: ReviewRequest) -> dict:
     ]
     feedback = _latest_feedback_snapshots(feedback)
 
-    done = len([task for task in tasks if task.get("status") == "done"])
-    blocked = len([task for task in tasks if task.get("status") == "blocked"])
-    total_minutes = sum(int(float(row.get("minutes") or 0)) for row in logs)
+    project_progress = schedule.get("project_progress") or []
+    progress_source = project_progress if project_progress else tasks
+    done = len([item for item in progress_source if item.get("status") == "done"])
+    blocked = len([item for item in progress_source if item.get("status") == "blocked"])
+    manual_minutes = sum(int(float(row.get("minutes") or 0)) for row in logs)
+    activity = schedule.get("activity") or {}
+    activity_seconds = sum(
+        int(seconds or 0)
+        for day, seconds in (activity.get("by_date") or {}).items()
+        if start <= (_parse_date(day) or anchor) <= anchor
+    )
+    automatic_minutes = round(activity_seconds / 60)
+    period_pages: defaultdict[str, int] = defaultdict(int)
+    for day, pages in (activity.get("by_date_page") or {}).items():
+        if start <= (_parse_date(day) or anchor) <= anchor and isinstance(pages, dict):
+            for page, seconds in pages.items():
+                period_pages[page] += int(seconds or 0)
+    total_minutes = automatic_minutes if automatic_minutes > 0 else manual_minutes
     stage_minutes = defaultdict(int)
     blockers = Counter()
     for row in logs:
@@ -329,12 +374,17 @@ def generate_review(project_id: str, payload: ReviewRequest) -> dict:
     best_ratio = _top_metric_group(feedback, "aspect_ratio", "views")
 
     advice = []
-    completion_rate = done / len(tasks) if tasks else 0
+    completion_rate = done / len(progress_source) if progress_source else 0
     if completion_rate < 0.7:
         advice.append("Reduce scope or move image/edit tasks earlier in the week.")
     if stage_minutes:
         slowest = max(stage_minutes.items(), key=lambda item: item[1])[0]
         advice.append(f"Most tracked time went to {slowest}; review that workflow step.")
+    elif automatic_minutes:
+        active_pages = period_pages
+        if active_pages:
+            busiest_page = max(active_pages.items(), key=lambda item: int(item[1] or 0))[0]
+            advice.append(f"Most active project time was spent in {busiest_page}.")
     if best_ratio:
         advice.append(f"Keep testing {best_ratio} because it has the highest logged views in recent feedback.")
     if conversions:
@@ -350,12 +400,16 @@ def generate_review(project_id: str, payload: ReviewRequest) -> dict:
         "period": payload.period,
         "start_date": start.isoformat(),
         "end_date": anchor.isoformat(),
-        "tasks_total": len(tasks),
+        "tasks_total": len(progress_source),
         "tasks_done": done,
         "tasks_blocked": blocked,
+        "progress_source": "project_state" if project_progress else "manual_schedule",
         "completion_rate": round(completion_rate, 2),
         "tracked_minutes": total_minutes,
         "tracked_hours": round(total_minutes / 60, 2),
+        "automatic_active_minutes": automatic_minutes,
+        "manual_logged_minutes": manual_minutes,
+        "activity_by_page": dict(period_pages),
         "stage_minutes": dict(stage_minutes),
         "top_blockers": blockers.most_common(5),
         "posts_logged": len(feedback),
@@ -384,6 +438,10 @@ def _tasks_path(project_id: str) -> Path:
 
 def _time_log_path(project_id: str) -> Path:
     return get_project_dir(project_id) / "time_logs.csv"
+
+
+def _activity_path(project_id: str) -> Path:
+    return get_project_dir(project_id) / "activity.json"
 
 
 def _feedback_path(project_id: str) -> Path:

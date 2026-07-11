@@ -30,6 +30,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
   const [testResults, setTestResults] = useState(null);
+  const [testElapsed, setTestElapsed] = useState(0);
 
   useEffect(() => {
     api
@@ -51,6 +52,17 @@ export default function SettingsPage() {
       })
       .catch((error) => setMessage(error.message));
   }, []);
+
+  useEffect(() => {
+    if (busy !== "test") return undefined;
+    const started = Date.now();
+    setTestElapsed(0);
+    const timer = window.setInterval(
+      () => setTestElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   const providerType = form.provider_type;
   const textProvider = form.text_provider;
@@ -104,19 +116,42 @@ export default function SettingsPage() {
     if (!window.confirm(t("realConnectionTestConfirm"))) return;
     setBusy("test");
     setMessage("");
-    setTestResults(null);
+    setTestResults({
+      text: { status: "testing", ok: null },
+      image: { status: "testing", ok: null },
+    });
     try {
-      const response = await api.testSettings(effectiveForm);
-      setTestResults(response.data || null);
-      if (!response.ok) {
-        const imageErrors = response.data?.image?.errors || [];
-        const textErrors = response.data?.text?.errors || [];
-        const errors = [...imageErrors, ...textErrors].map(connectionErrorText);
-        throw new Error(errors.join(" · ") || response.message || t("connectionTestFailed"));
-      }
-      setMessage(t("connectionTested"));
-    } catch (error) {
-      setMessage(error.message);
+      const runProbe = async (kind, request, timeoutMs) => {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+        let result;
+        try {
+          const response = await request(controller.signal);
+          result = response.data || {
+            ok: false,
+            status: "failed",
+            errors: [response.message || t("connectionTestFailed")],
+          };
+        } catch (error) {
+          const timedOut = error.name === "AbortError";
+          result = {
+            ok: false,
+            status: timedOut ? "timeout" : "failed",
+            errors: [timedOut ? t("connectionTimedOut") : error.message],
+          };
+        } finally {
+          window.clearTimeout(timer);
+        }
+        setTestResults((current) => ({ ...current, [kind]: result }));
+        return result;
+      };
+      const [textResult, imageResult] = await Promise.all([
+        runProbe("text", (signal) => api.testTextSettings(effectiveForm, signal), 120_000),
+        runProbe("image", (signal) => api.testImageSettings(effectiveForm, signal), 210_000),
+      ]);
+      setMessage(
+        textResult.ok && imageResult.ok ? t("connectionTested") : t("connectionTestFinishedWithErrors"),
+      );
     } finally {
       setBusy("");
     }
@@ -285,7 +320,7 @@ export default function SettingsPage() {
             {busy === "save" ? t("saving") : t("saveSettings")}
           </button>
           <button className="secondary" disabled={busy === "test"} onClick={test} type="button">
-            {busy === "test" ? t("testing") : t("testConnection")}
+            {busy === "test" ? `${t("testing")} ${testElapsed}s` : t("testConnection")}
           </button>
           <button
             className="secondary danger"
@@ -340,12 +375,22 @@ function connectionErrorText(item) {
 }
 
 function ConnectionResult({ label, result, t }) {
+  const testing = result?.status === "testing";
+  const timedOut = result?.status === "timeout";
   const passed = result?.ok === true;
   const errors = Array.isArray(result?.errors) ? result.errors.map(connectionErrorText).filter(Boolean) : [];
   return (
-    <div className={`connection-result ${passed ? "passed" : "failed"}`}>
+    <div className={`connection-result ${testing ? "testing" : passed ? "passed" : "failed"}`}>
       <span>{label}</span>
-      <strong>{passed ? t("connectionPassed") : t("connectionFailed")}</strong>
+      <strong>
+        {testing
+          ? t("connectionTesting")
+          : timedOut
+            ? t("connectionTimedOut")
+            : passed
+              ? t("connectionPassed")
+              : t("connectionFailed")}
+      </strong>
       <small>
         {result?.model || "-"}
         {result?.duration_seconds != null ? ` · ${result.duration_seconds}s` : ""}

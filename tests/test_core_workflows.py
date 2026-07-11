@@ -13,6 +13,7 @@ from openpyxl import Workbook, load_workbook
 from PIL import Image
 from pypdf import PdfWriter
 import requests
+from fastapi import UploadFile
 
 from api import openai_image_client
 from backend.app import config
@@ -20,6 +21,7 @@ from backend.app.models.schemas import (
     ProjectCreate,
     ProjectUpdate,
     ProjectWorkspacePayload,
+    ProjectActivityHeartbeat,
     ImageGenerationRequest,
     ReviewRequest,
     SchedulePlanRequest,
@@ -29,6 +31,7 @@ from backend.app.models.schemas import (
     SocialFeedbackCreate,
     StoryOptimizationRequest,
 )
+from backend.app.routes import projects as project_routes
 from backend.app.routes import settings as settings_routes
 from backend.app.services import (
     export_service,
@@ -43,6 +46,7 @@ from backend.app.services.schedule_service import (
     generate_review,
     generate_schedule,
     get_schedule,
+    record_project_activity,
 )
 from backend.app.services.shotlist_service import (
     add_shot,
@@ -229,6 +233,107 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertEqual(stages["script"]["status"], "done")
         self.assertEqual(stages["bible"]["status"], "doing")
         self.assertEqual(stages["storyboard"]["status"], "blocked")
+
+    def test_project_activity_is_automatic_and_export_progress_never_exceeds_total(self):
+        project = self.create_project("Activity")
+        project_id = project["project_id"]
+        first = record_project_activity(
+            project_id,
+            ProjectActivityHeartbeat(seconds=30, page="storyboard"),
+        )
+        second = record_project_activity(
+            project_id,
+            ProjectActivityHeartbeat(seconds=30, page="schedule"),
+        )
+        self.assertEqual(first["total_seconds"], 30)
+        self.assertEqual(second["total_seconds"], 60)
+        export_dir = project_service.get_project_export_dir(project_id)
+        (export_dir / "one.json").write_text("{}", encoding="utf-8")
+        (export_dir / "two.csv").write_text("a,b", encoding="utf-8")
+        schedule = get_schedule(project_id)
+        self.assertEqual(schedule["activity"]["total_seconds"], 60)
+        export_stage = next(item for item in schedule["project_progress"] if item["stage"] == "export")
+        self.assertEqual((export_stage["completed"], export_stage["total"]), (1, 1))
+        review = generate_review(
+            project_id,
+            ReviewRequest(period="week", anchor_date="2026-07-11"),
+        )
+        self.assertEqual(review["automatic_active_minutes"], 1)
+        self.assertEqual(review["progress_source"], "project_state")
+
+    def test_native_desktop_save_writes_the_selected_file_atomically(self):
+        project = self.create_project("Desktop Save")
+        destination = self.root / "exports outside project" / "优化稿.txt"
+        upload = UploadFile(filename="optimized.txt", file=io.BytesIO("真实内容".encode("utf-8")))
+        with patch.object(project_routes, "_desktop_save_dialog", return_value=str(destination)):
+            response = project_routes.save_desktop_export(
+                project["project_id"],
+                upload,
+                "optimized.txt",
+            )
+        self.assertTrue(response.ok)
+        self.assertEqual(destination.read_text(encoding="utf-8"), "真实内容")
+        self.assertFalse(list(destination.parent.glob("*.tmp")))
+
+    def test_ai_reference_plan_creates_separate_production_assets(self):
+        project = self.create_project("Asset Plan")
+        provider_text = json.dumps(
+            {
+                "assets": [
+                    {
+                        "asset_id": "hero-turnaround",
+                        "category": "character_turnaround",
+                        "name": "主角三视图",
+                        "purpose": "固定发型服装和体型",
+                        "image_prompt": "Production character turnaround sheet, neutral background, no story sequence, no text",
+                    },
+                    {
+                        "asset_id": "memory-umbrella",
+                        "category": "prop",
+                        "name": "记忆雨伞",
+                        "purpose": "固定关键道具",
+                        "image_prompt": "Isolated production prop reference, orthographic views, no story sequence, no text",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with (
+            patch.object(image_service, "is_offline_mode", return_value=False),
+            patch.object(image_service, "get_active_settings", return_value={}),
+            patch.object(image_service, "validate_text_settings", return_value=[]),
+            patch.object(image_service, "get_text_api_config", return_value={"provider": "test", "model": "test"}),
+            patch.object(image_service, "generate_text", return_value={"ok": True, "text": provider_text}),
+        ):
+            result = image_service.plan_reference_assets(
+                project["project_id"],
+                script="全新雨伞故事",
+                categories=["main_characters", "props"],
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual({item["category"] for item in result["plan"]}, {"character_turnaround", "prop"})
+        progress = []
+
+        def fake_image(_settings, *, output_path, **_kwargs):
+            Path(output_path).write_bytes(b"image")
+            return {"ok": True, "status": "done", "output_path": str(output_path)}
+
+        with (
+            patch.object(image_service, "is_offline_mode", return_value=False),
+            patch.object(image_service, "get_active_settings", return_value={}),
+            patch.object(image_service, "validate_api_settings", return_value=[]),
+            patch.object(image_service, "generate_image", side_effect=fake_image),
+        ):
+            generated = image_service.generate_reference_concepts(
+                project["project_id"],
+                plan=result["plan"],
+                progress_callback=lambda **value: progress.append(value),
+            )
+        self.assertEqual((generated["planned"], generated["completed"], generated["failed"]), (2, 2, 0))
+        self.assertEqual(progress[-1]["completed"], 2)
+        listed = image_service.list_reference_images(project["project_id"])
+        self.assertEqual({item["name"] for item in listed}, {"主角三视图", "记忆雨伞"})
 
     def test_new_script_bible_analysis_excludes_old_story_entities(self):
         project = self.create_project("Fresh Bible")
@@ -639,13 +744,20 @@ class StoryOptimizationTests(unittest.TestCase):
 
     def test_real_ai_result_has_provenance_and_no_english_template_fill(self):
         result = self._run_with_response(
-            json.dumps({"logline": "Changed", "improved_script": "A genuinely revised story"})
+            json.dumps(
+                {
+                    "logline": "Changed",
+                    "improved_script": "A genuinely revised story",
+                    "risks": [{"risk": "Visual drift", "solution": "Lock references"}],
+                }
+            )
         )
         self.assertTrue(result["ok"])
         self.assertEqual(result["source"], "ai")
         self.assertEqual(result["model"], "test-model")
         self.assertEqual(result["output_language"], "zh-CN")
         self.assertEqual(result["storyboard_strategy"], [])
+        self.assertEqual(result["risks"], [{"risk": "Visual drift", "solution": "Lock references"}])
         self.assertTrue(result["input_sha256"])
 
 
@@ -830,6 +942,33 @@ class SettingsSecurityTests(unittest.TestCase):
         self.assertTrue(response.ok)
         self.assertEqual(response.data["text"]["validation_level"], "real_inference")
         self.assertEqual(response.data["image"]["validation_level"], "real_generation")
+
+    def test_text_and_image_probes_return_independently(self):
+        payload = SettingsPayload(
+            provider_type="custom",
+            base_url="https://example.invalid/v1",
+            api_key="image-key",
+            text_provider="gpt",
+            text_provider_mode="relay",
+            text_base_url="https://example.invalid/v1",
+            text_api_key="text-key",
+        )
+        with (
+            patch.object(settings_routes, "_settings_for_test", return_value=(payload.model_dump(), "request")),
+            patch.object(settings_routes, "validate_text_settings", return_value=[]),
+            patch.object(settings_routes, "get_text_api_config", return_value={"provider": "gpt", "model": "text"}),
+            patch.object(settings_routes, "_test_text_inference", return_value={"ok": True, "status": "passed"}),
+        ):
+            text_response = settings_routes.test_text_settings(payload)
+        with (
+            patch.object(settings_routes, "_settings_for_test", return_value=(payload.model_dump(), "request")),
+            patch.object(settings_routes, "validate_api_settings", return_value=[]),
+            patch.object(settings_routes, "_test_image_generation", return_value={"ok": False, "status": "timeout", "errors": ["timeout"]}),
+        ):
+            image_response = settings_routes.test_image_settings(payload)
+        self.assertTrue(text_response.ok)
+        self.assertFalse(image_response.ok)
+        self.assertEqual(image_response.data["status"], "timeout")
 
     def test_saved_keys_can_be_explicitly_cleared(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.app.models.schemas import (
@@ -60,6 +62,26 @@ def _desktop_dialog(dialog_type: str) -> str:
     return str(selected[0]) if selected else ""
 
 
+def _desktop_save_dialog(suggested_filename: str) -> str:
+    try:
+        import webview
+    except ImportError as exc:
+        raise RuntimeError("Native save dialogs are available in desktop mode only.") from exc
+    if not webview.windows:
+        raise RuntimeError("No active desktop window is available for the native save dialog.")
+    safe_name = Path(suggested_filename).name or "paneloom-export"
+    suffix = Path(safe_name).suffix
+    file_types = (f"{suffix.lstrip('.').upper()} file (*{suffix})",) if suffix else ()
+    selected = webview.windows[0].create_file_dialog(
+        webview.SAVE_DIALOG,
+        save_filename=safe_name,
+        file_types=file_types,
+    )
+    if isinstance(selected, (list, tuple)):
+        return str(selected[0]) if selected else ""
+    return str(selected or "")
+
+
 @router.get("/storage")
 def get_project_storage() -> ApiResponse:
     return ApiResponse(
@@ -85,6 +107,45 @@ def choose_backup_file() -> ApiResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=bool(path), message="Backup selected." if path else "Backup selection cancelled.", data={"path": path})
+
+
+@router.post("/{project_id}/desktop-save")
+def save_desktop_export(
+    project_id: str,
+    file: UploadFile = File(...),
+    suggested_filename: str = Form("paneloom-export"),
+) -> ApiResponse:
+    try:
+        project = project_service.require_project(project_id)
+        safe_name = Path(suggested_filename).name or "paneloom-export"
+        destination_text = _desktop_save_dialog(safe_name)
+        if not destination_text:
+            return ApiResponse(ok=False, message="Save cancelled.", data={"cancelled": True})
+        content = file.file.read(100 * 1024 * 1024 + 1)
+        if len(content) > 100 * 1024 * 1024:
+            raise ValueError("The export exceeds the 100 MB desktop save limit.")
+        destination = Path(destination_text)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(content)
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(
+        ok=True,
+        message="File saved.",
+        data={
+            "path": str(destination),
+            "filename": destination.name,
+            "size": len(content),
+            "project_id": project["project_id"],
+        },
+    )
 
 
 @router.post("/open")
