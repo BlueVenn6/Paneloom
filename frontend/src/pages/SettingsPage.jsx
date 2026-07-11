@@ -18,7 +18,6 @@ const defaults = {
   text_api_key: "",
   text_model: "gpt-5.5",
   image_model: "gpt-image-2",
-  image_size: "1024x1024",
   image_quality: "low",
   image_result_mode: "auto",
 };
@@ -108,12 +107,14 @@ export default function SettingsPage() {
       if (!response.ok) {
         const imageErrors = response.data?.image?.errors || [];
         const textErrors = response.data?.text?.errors || [];
-        const errors = [...imageErrors, ...textErrors].map((item) =>
-          typeof item === "string" ? item : JSON.stringify(item),
-        );
+        const errors = [...imageErrors, ...textErrors].map(connectionErrorText);
         throw new Error(errors.join(" · ") || response.message || t("connectionTestFailed"));
       }
-      setMessage(t("connectionTested"));
+      setMessage(
+        response.data?.image?.validation_level === "endpoint_only"
+          ? t("imageEndpointReachableNotVerified")
+          : t("connectionTested"),
+      );
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -255,14 +256,6 @@ export default function SettingsPage() {
 
         <div className="form-row">
           <label>
-            <span>{t("imageSize")}</span>
-            <input
-              value={form.image_size}
-              onChange={(event) => update("image_size", event.target.value)}
-              placeholder="1024x1024"
-            />
-          </label>
-          <label>
             <span>{t("imageQuality")}</span>
             <select
               value={form.image_quality}
@@ -325,5 +318,17 @@ export default function SettingsPage() {
         </dl>
       </div>
     </section>
+  );
+}
+
+function connectionErrorText(item) {
+  if (typeof item === "string") return item;
+  if (!item || typeof item !== "object") return String(item || "");
+  return (
+    item.error?.message ||
+    item.message ||
+    item.detail ||
+    item.text ||
+    `HTTP ${item.status_code || "error"}`
   );
 }

@@ -71,11 +71,7 @@ def test_settings(payload: SettingsPayload | None = None) -> ApiResponse:
 
     image_result = {"ok": False, "errors": image_errors}
     if not image_errors:
-        image_result = _test_openai_compatible_models(
-            base_url=settings["base_url"],
-            api_key=settings["api_key"],
-            model=settings.get("image_model", ""),
-        )
+        image_result = _test_image_connection(settings)
     text_config = get_text_api_config(settings)
     text_result = {"ok": False, "errors": text_errors, "provider": text_config["provider"]}
     if not text_errors:
@@ -95,6 +91,35 @@ def test_settings(payload: SettingsPayload | None = None) -> ApiResponse:
         message="Connection tests completed.",
         data={"source": source, "image": image_result, "text": text_result},
     )
+
+
+def _test_image_connection(settings: dict) -> dict:
+    result = _test_openai_compatible_models(
+        base_url=settings["base_url"],
+        api_key=settings["api_key"],
+        model=settings.get("image_model", ""),
+    )
+    result.setdefault("validation_level", "models" if result.get("ok") else "failed")
+    if result.get("ok") or settings.get("provider_type") != "custom":
+        return result
+
+    provider_message = " ".join(_connection_error_text(item) for item in result.get("errors", []))
+    if "only accepts image api paths" not in provider_message.lower():
+        return result
+    return {
+        "ok": True,
+        "status_code": result.get("status_code"),
+        "checked_url": result.get("checked_url"),
+        "model": settings.get("image_model", ""),
+        "model_found": None,
+        "models_checked": 0,
+        "validation_level": "endpoint_only",
+        "warnings": [
+            "Image service is reachable but does not support model-list checks. "
+            "The API key and model will be verified by the first real generation."
+        ],
+        "errors": [],
+    }
 
 
 def _test_openai_compatible_models(base_url: str, api_key: str, model: str) -> dict:
@@ -119,7 +144,8 @@ def _test_openai_compatible_models(base_url: str, api_key: str, model: str) -> d
         return {
             "ok": False,
             "status_code": response.status_code,
-            "errors": [body],
+            "checked_url": checked_url,
+            "errors": [_connection_error_text(body, response.status_code)],
         }
 
     model_ids = [
@@ -137,6 +163,19 @@ def _test_openai_compatible_models(base_url: str, api_key: str, model: str) -> d
         "models_checked": len(model_ids),
         "errors": [] if model_found is not False else ["Configured model was not found."],
     }
+
+
+def _connection_error_text(value: object, status_code: int | None = None) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        nested_error = value.get("error")
+        if isinstance(nested_error, dict) and nested_error.get("message"):
+            return str(nested_error["message"])
+        for key in ("message", "detail", "text"):
+            if value.get(key):
+                return str(value[key])
+    return f"HTTP {status_code or 'error'} returned by the provider."
 
 
 def _test_google_native_models(config: dict) -> dict:

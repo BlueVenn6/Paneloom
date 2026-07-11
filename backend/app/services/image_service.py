@@ -25,6 +25,7 @@ from backend.app.services.project_service import (
     get_project_dir,
     get_project_generated_dir,
     get_project_reference_dir,
+    get_project_workspace,
     project_file_url,
     require_project,
     to_project_relative_path,
@@ -554,7 +555,7 @@ def _failure_details(
         "prompt": prompt,
         "endpoint": result.get("endpoint") or _generation_endpoint(settings),
         "model": result.get("model") or settings.get("image_model", ""),
-        "size": result.get("size") or settings.get("image_size", ""),
+        "size": result.get("size") or "",
         "quality": result.get("quality") or settings.get("image_quality", ""),
         "status_code": result.get("status_code") or "",
         "error_type": result.get("error_type") or "",
@@ -709,9 +710,14 @@ def _generate_shot_image_locked(
 
     output_dir = get_project_generated_dir(project_id)
     output_dir.mkdir(parents=True, exist_ok=True)
+    requested_aspects = list(request.aspect_presets) if request else []
+    if not requested_aspects:
+        requested_aspects = list(get_project_workspace(project_id).get("selected_aspects") or [])
+    if not requested_aspects:
+        requested_aspects = ["vertical_9_16"]
     generation_sizes = resolve_generation_sizes(
-        request.aspect_presets if request else [],
-        request.size if request and request.size else settings.get("image_size", "1024x1024"),
+        requested_aspects,
+        request.size if request and request.size else "1024x1792",
     )
     results = []
     version_stamp = _generation_stamp()

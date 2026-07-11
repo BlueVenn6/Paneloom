@@ -390,6 +390,56 @@ class IsolatedProjectTestCase(unittest.TestCase):
         )
         self.assertEqual(stored["versions"][-1]["status"], "partial")
 
+    def test_workspace_aspect_overrides_legacy_settings_image_size(self):
+        project = self.create_project("Workspace Aspect")
+        project_service.save_project_workspace(
+            project["project_id"],
+            {"selected_aspects": ["square"]},
+        )
+        shot = add_shot(project["project_id"], ShotCreate(prompt="Square panel"))
+        observed_sizes = []
+
+        def fake_generate(settings, prompt, size, quality, output_path):
+            observed_sizes.append(size)
+            Image.new("RGB", (1024, 1024), color=(30, 40, 50)).save(output_path)
+            return {
+                "ok": True,
+                "status": "done",
+                "output_path": str(output_path),
+                "output_url": "",
+                "download_status": "saved_b64_json",
+                "download_error": "",
+                "endpoint": "https://example.invalid/images/generations",
+                "model": "test-image",
+                "size": size,
+                "quality": quality or "low",
+                "status_code": 200,
+            }
+
+        legacy_settings = {
+            "provider_type": "custom",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "test-key",
+            "image_model": "test-image",
+            "image_size": "64x64",
+            "image_quality": "low",
+            "image_result_mode": "auto",
+        }
+        with (
+            patch.object(image_service, "get_active_settings", return_value=legacy_settings),
+            patch.object(image_service, "generate_image", side_effect=fake_generate),
+        ):
+            result = image_service.generate_shot_image(
+                project["project_id"],
+                shot["shot_id"],
+                ImageGenerationRequest(),
+            )
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(observed_sizes, ["1024x1024"])
+        self.assertEqual(result["outputs"][0]["size"], "1024x1024")
+        self.assertEqual(result["outputs"][0]["final_size"], "1024x1024")
+
     def test_bible_and_selected_reference_are_used_by_generation(self):
         project = self.create_project("Continuity Generation")
         project_service.save_project_bible(
@@ -595,6 +645,7 @@ class SettingsSecurityTests(unittest.TestCase):
                 stored_text = settings_path.read_text(encoding="utf-8")
                 self.assertNotIn("sk-image-secret-value", stored_text)
                 self.assertNotIn("sk-text-secret-value", stored_text)
+                self.assertNotIn("image_size", stored_text)
                 self.assertIn("api_key_encrypted", stored_text)
                 public = config.get_active_settings(include_secret=False)
                 self.assertIn("****", public["api_key"])
@@ -617,6 +668,30 @@ class SettingsSecurityTests(unittest.TestCase):
         ):
             response = settings_routes.test_settings(payload)
         self.assertFalse(response.ok)
+
+    def test_image_only_provider_is_reported_as_endpoint_only(self):
+        class Response:
+            status_code = 400
+            text = '{"text":"draw.dragtokens.com only accepts image API paths"}'
+
+            @staticmethod
+            def json():
+                return {"text": "draw.dragtokens.com only accepts image API paths"}
+
+        settings = {
+            "provider_type": "custom",
+            "base_url": "https://draw.dragtokens.com/v1",
+            "api_key": "image-key",
+            "image_model": "gpt-image-2",
+        }
+        with patch.object(settings_routes.requests, "get", return_value=Response()):
+            result = settings_routes._test_image_connection(settings)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["validation_level"], "endpoint_only")
+        self.assertIsNone(result["model_found"])
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["warnings"])
 
     def test_saved_keys_can_be_explicitly_cleared(self):
         with tempfile.TemporaryDirectory() as directory:

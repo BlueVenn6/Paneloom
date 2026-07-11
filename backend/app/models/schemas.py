@@ -300,7 +300,6 @@ class SettingsPayload(BaseModel):
     text_api_key: str = ""
     text_model: str = "gpt-5.5"
     image_model: str = "gpt-image-2"
-    image_size: str = "1024x1024"
     image_quality: Literal["low", "medium", "high"] = "low"
     image_result_mode: Literal["auto", "prefer_b64_json", "url_only"] = "auto"
     clear_saved_keys: bool = False

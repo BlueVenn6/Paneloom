@@ -46,7 +46,6 @@ DEFAULT_TEXT_MODEL = "gpt-5.5"
 DEFAULT_GLM_TEXT_MODEL = "glm-4.5"
 DEFAULT_GOOGLE_TEXT_MODEL = "gemini-3.5-flash"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
-DEFAULT_IMAGE_SIZE = "1024x1024"
 DEFAULT_IMAGE_QUALITY = "low"
 DEFAULT_IMAGE_RESULT_MODE = "auto"
 
@@ -170,7 +169,6 @@ def get_env_settings() -> dict[str, Any]:
         "text_api_key": os.getenv("TEXT_API_KEY", ""),
         "text_model": os.getenv("TEXT_MODEL", DEFAULT_TEXT_MODEL),
         "image_model": os.getenv("IMAGE_MODEL", DEFAULT_IMAGE_MODEL),
-        "image_size": os.getenv("IMAGE_SIZE", DEFAULT_IMAGE_SIZE),
         "image_quality": os.getenv("IMAGE_QUALITY", DEFAULT_IMAGE_QUALITY),
         "image_result_mode": os.getenv("IMAGE_RESULT_MODE", DEFAULT_IMAGE_RESULT_MODE),
     }
@@ -187,7 +185,6 @@ def normalize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     image_result_mode = settings.get("image_result_mode") or DEFAULT_IMAGE_RESULT_MODE
     if image_result_mode not in {"auto", "prefer_b64_json", "url_only"}:
         image_result_mode = DEFAULT_IMAGE_RESULT_MODE
-    image_size = _normalize_image_size(settings.get("image_size") or DEFAULT_IMAGE_SIZE)
     text_provider = settings.get("text_provider") or "gpt"
     if text_provider not in {"gpt", "glm", "google"}:
         text_provider = "gpt"
@@ -207,7 +204,6 @@ def normalize_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "text_api_key": settings.get("text_api_key") or settings.get("api_key") or "",
         "text_model": text_model,
         "image_model": settings.get("image_model") or DEFAULT_IMAGE_MODEL,
-        "image_size": image_size,
         "image_quality": settings.get("image_quality") or DEFAULT_IMAGE_QUALITY,
         "image_result_mode": image_result_mode,
     }
@@ -245,8 +241,6 @@ def validate_api_settings(settings: dict[str, Any]) -> list[str]:
         errors.append("Base URL is missing. Configure it in Settings or OPENAI_BASE_URL.")
     if not settings.get("image_model"):
         errors.append("Image model is missing.")
-    if not _is_valid_image_size(settings.get("image_size", "")):
-        errors.append("Image size must look like 1024x1024, 900x1600, or auto.")
     return errors
 
 
@@ -284,26 +278,6 @@ def validate_text_settings(settings: dict[str, Any]) -> list[str]:
     if not config.get("model"):
         errors.append("Text model is missing.")
     return errors
-
-
-def _normalize_image_size(value: str) -> str:
-    cleaned = str(value or "").strip().lower().replace("*", "x").replace("×", "x")
-    return cleaned or DEFAULT_IMAGE_SIZE
-
-
-def _is_valid_image_size(value: str) -> bool:
-    cleaned = _normalize_image_size(value)
-    if cleaned == "auto":
-        return True
-    parts = cleaned.split("x")
-    if len(parts) != 2:
-        return False
-    try:
-        width = int(parts[0])
-        height = int(parts[1])
-    except ValueError:
-        return False
-    return 64 <= width <= 4096 and 64 <= height <= 4096
 
 
 def _default_text_model(provider: str) -> str:
