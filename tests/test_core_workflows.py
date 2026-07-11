@@ -27,9 +27,16 @@ from backend.app.models.schemas import (
     ShotCreate,
     ShotUpdate,
     SocialFeedbackCreate,
+    StoryOptimizationRequest,
 )
 from backend.app.routes import settings as settings_routes
-from backend.app.services import export_service, image_service, project_service
+from backend.app.services import (
+    export_service,
+    bible_analysis_service,
+    image_service,
+    project_service,
+    story_optimization_service,
+)
 from backend.app.services.document_import_service import DocumentImportError, import_document
 from backend.app.services.schedule_service import (
     add_social_feedback,
@@ -197,6 +204,81 @@ class IsolatedProjectTestCase(unittest.TestCase):
         )
         self.assertTrue(result["tasks"])
         self.assertTrue(result["plan"]["summary"]["overloaded_days"])
+
+    def test_automatic_progress_rejects_legacy_import_derivatives_as_current(self):
+        project = self.create_project("Progress")
+        project_id = project["project_id"]
+        project_service.save_project_workspace(
+            project_id,
+            {
+                "script": "A newly imported script",
+                "script_import": {"filename": "new.pdf", "warnings": []},
+            },
+        )
+        project_service.save_project_bible(
+            project_id,
+            {
+                "characters": "Old character",
+                "locations": "Old location",
+                "world_notes": "Old world",
+            },
+        )
+        add_shot(project_id, ShotCreate(scene_id="OLD-001", prompt="Old prompt"))
+
+        stages = {item["stage"]: item for item in get_schedule(project_id)["project_progress"]}
+        self.assertEqual(stages["script"]["status"], "done")
+        self.assertEqual(stages["bible"]["status"], "doing")
+        self.assertEqual(stages["storyboard"]["status"], "blocked")
+
+    def test_new_script_bible_analysis_excludes_old_story_entities(self):
+        project = self.create_project("Fresh Bible")
+        project_id = project["project_id"]
+        project_service.save_project_bible(
+            project_id,
+            {
+                "visual_style": "User-selected ink style",
+                "characters": "Old character that must not leak",
+                "locations": "Old location that must not leak",
+                "world_notes": "Old world that must not leak",
+            },
+        )
+        provider_result = json.dumps(
+            {
+                "visual_style": "User-selected ink style",
+                "characters": "New umbrella repairer",
+                "locations": "Rainy workshop",
+                "props": "Memory umbrella",
+                "world_notes": "Umbrellas remember lies",
+                "prompt_prefix": "Stable ink comic",
+                "negative_prompt": "watermark",
+            }
+        )
+        with (
+            patch.object(bible_analysis_service, "is_offline_mode", return_value=False),
+            patch.object(bible_analysis_service, "get_active_settings", return_value={}),
+            patch.object(bible_analysis_service, "validate_text_settings", return_value=[]),
+            patch.object(
+                bible_analysis_service,
+                "get_text_api_config",
+                return_value={"provider": "test", "model": "test"},
+            ),
+            patch.object(
+                bible_analysis_service,
+                "generate_text",
+                return_value={"ok": True, "text": provider_result},
+            ) as provider,
+        ):
+            result = bible_analysis_service.analyze_project_bible(
+                project_id,
+                script="A brand-new umbrella story",
+                use_ai=True,
+                replace_existing=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertNotIn("Old character", provider.call_args.kwargs["user_prompt"])
+        self.assertNotIn("Old character", json.dumps(result["bible"]))
+        self.assertEqual(result["bible"]["characters"], "New umbrella repairer")
 
     def test_review_uses_latest_social_snapshot_and_persists(self):
         project = self.create_project("Review")
@@ -523,6 +605,50 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertIn("Rainy station platform", observed["prompt"])
 
 
+class StoryOptimizationTests(unittest.TestCase):
+    def _run_with_response(self, response_text: str) -> dict:
+        with (
+            patch.object(story_optimization_service, "get_active_settings", return_value={"text_model": "test"}),
+            patch.object(story_optimization_service, "validate_text_settings", return_value=[]),
+            patch.object(story_optimization_service, "is_offline_mode", return_value=False),
+            patch.object(
+                story_optimization_service,
+                "get_text_api_config",
+                return_value={"provider": "test", "model": "test-model"},
+            ),
+            patch.object(
+                story_optimization_service,
+                "generate_text",
+                return_value={"ok": True, "text": response_text},
+            ),
+        ):
+            return story_optimization_service.optimize_story(
+                StoryOptimizationRequest(
+                    script="Original story",
+                    use_ai=True,
+                    output_language="zh-CN",
+                )
+            )
+
+    def test_real_ai_result_cannot_reuse_the_original_script(self):
+        result = self._run_with_response(
+            json.dumps({"logline": "Same", "improved_script": "Original story"})
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "unchanged_model_output")
+
+    def test_real_ai_result_has_provenance_and_no_english_template_fill(self):
+        result = self._run_with_response(
+            json.dumps({"logline": "Changed", "improved_script": "A genuinely revised story"})
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "ai")
+        self.assertEqual(result["model"], "test-model")
+        self.assertEqual(result["output_language"], "zh-CN")
+        self.assertEqual(result["storyboard_strategy"], [])
+        self.assertTrue(result["input_sha256"])
+
+
 class ImageClientBoundaryTests(unittest.TestCase):
     def test_request_construction_and_atomic_result_persistence(self):
         image = io.BytesIO()
@@ -664,34 +790,46 @@ class SettingsSecurityTests(unittest.TestCase):
         failed = {"ok": False, "errors": ["connection failed"]}
         with (
             patch.object(settings_routes, "_merge_existing_secret", return_value=payload.model_dump()),
-            patch.object(settings_routes, "_test_openai_compatible_models", return_value=failed),
+            patch.object(settings_routes, "_test_image_generation", return_value=failed),
+            patch.object(settings_routes, "_test_text_inference", return_value=failed),
         ):
             response = settings_routes.test_settings(payload)
         self.assertFalse(response.ok)
 
-    def test_image_only_provider_is_reported_as_endpoint_only(self):
-        class Response:
-            status_code = 400
-            text = '{"text":"draw.dragtokens.com only accepts image API paths"}'
-
-            @staticmethod
-            def json():
-                return {"text": "draw.dragtokens.com only accepts image API paths"}
-
-        settings = {
-            "provider_type": "custom",
-            "base_url": "https://draw.dragtokens.com/v1",
-            "api_key": "image-key",
-            "image_model": "gpt-image-2",
+    def test_real_text_and_image_results_are_reported_separately(self):
+        payload = SettingsPayload(
+            provider_type="custom",
+            base_url="https://example.invalid/v1",
+            api_key="image-key",
+            text_provider="gpt",
+            text_provider_mode="relay",
+            text_base_url="https://example.invalid/v1",
+            text_api_key="text-key",
+        )
+        image_passed = {
+            "ok": True,
+            "status": "passed",
+            "validation_level": "real_generation",
+            "duration_seconds": 1.2,
+            "errors": [],
         }
-        with patch.object(settings_routes.requests, "get", return_value=Response()):
-            result = settings_routes._test_image_connection(settings)
+        text_passed = {
+            "ok": True,
+            "status": "passed",
+            "validation_level": "real_inference",
+            "duration_seconds": 0.4,
+            "errors": [],
+        }
+        with (
+            patch.object(settings_routes, "_merge_existing_secret", return_value=payload.model_dump()),
+            patch.object(settings_routes, "_test_image_generation", return_value=image_passed),
+            patch.object(settings_routes, "_test_text_inference", return_value=text_passed),
+        ):
+            response = settings_routes.test_settings(payload)
 
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["validation_level"], "endpoint_only")
-        self.assertIsNone(result["model_found"])
-        self.assertEqual(result["errors"], [])
-        self.assertTrue(result["warnings"])
+        self.assertTrue(response.ok)
+        self.assertEqual(response.data["text"]["validation_level"], "real_inference")
+        self.assertEqual(response.data["image"]["validation_level"], "real_generation")
 
     def test_saved_keys_can_be_explicitly_cleared(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [maskedTextKey, setMaskedTextKey] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
+  const [testResults, setTestResults] = useState(null);
 
   useEffect(() => {
     api
@@ -100,21 +101,20 @@ export default function SettingsPage() {
   }
 
   async function test() {
+    if (!window.confirm(t("realConnectionTestConfirm"))) return;
     setBusy("test");
     setMessage("");
+    setTestResults(null);
     try {
       const response = await api.testSettings(effectiveForm);
+      setTestResults(response.data || null);
       if (!response.ok) {
         const imageErrors = response.data?.image?.errors || [];
         const textErrors = response.data?.text?.errors || [];
         const errors = [...imageErrors, ...textErrors].map(connectionErrorText);
         throw new Error(errors.join(" · ") || response.message || t("connectionTestFailed"));
       }
-      setMessage(
-        response.data?.image?.validation_level === "endpoint_only"
-          ? t("imageEndpointReachableNotVerified")
-          : t("connectionTested"),
-      );
+      setMessage(t("connectionTested"));
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -297,6 +297,12 @@ export default function SettingsPage() {
             {t("clearSavedKeys")}
           </button>
         </div>
+        {testResults && (
+          <div className="connection-result-grid">
+            <ConnectionResult label={t("textModelStatus")} result={testResults.text} t={t} />
+            <ConnectionResult label={t("imageModelStatus")} result={testResults.image} t={t} />
+          </div>
+        )}
         {message && <p className="form-message">{message}</p>}
       </div>
 
@@ -330,5 +336,21 @@ function connectionErrorText(item) {
     item.detail ||
     item.text ||
     `HTTP ${item.status_code || "error"}`
+  );
+}
+
+function ConnectionResult({ label, result, t }) {
+  const passed = result?.ok === true;
+  const errors = Array.isArray(result?.errors) ? result.errors.map(connectionErrorText).filter(Boolean) : [];
+  return (
+    <div className={`connection-result ${passed ? "passed" : "failed"}`}>
+      <span>{label}</span>
+      <strong>{passed ? t("connectionPassed") : t("connectionFailed")}</strong>
+      <small>
+        {result?.model || "-"}
+        {result?.duration_seconds != null ? ` · ${result.duration_seconds}s` : ""}
+      </small>
+      {errors.length > 0 && <p>{errors.join(" · ")}</p>}
+    </div>
   );
 }

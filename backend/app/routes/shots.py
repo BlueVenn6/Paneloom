@@ -91,18 +91,24 @@ def post_shots_from_script(project_id: str, payload: ScriptBreakdownRequest) -> 
     try:
         require_project(project_id)
         breakdown = breakdown_script(payload)
-        shots = add_shots(project_id, breakdown["shots"])
+        shots = add_shots(project_id, breakdown["shots"]) if breakdown.get("ok", True) else []
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return ApiResponse(
-        ok=True,
-        message=f"Created {len(shots)} storyboard shots from script.",
+        ok=bool(breakdown.get("ok", True)),
+        message=(
+            f"Created {len(shots)} storyboard shots from script."
+            if breakdown.get("ok", True)
+            else breakdown.get("error_message", "AI storyboard generation failed.")
+        ),
         data={
             "source": breakdown["source"],
             "warnings": breakdown["warnings"],
+            "error": breakdown.get("error", ""),
+            "error_message": breakdown.get("error_message", ""),
             "shots": shots,
         },
     )
@@ -117,8 +123,12 @@ def rewrite_project_storyboard(project_id: str, payload: ShotRewriteRequest) -> 
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ApiResponse(
-        ok=True,
-        message=f"Rewritten {len(result['shots'])} storyboard shots.",
+        ok=bool(result.get("ok", True)),
+        message=(
+            f"Rewritten {len(result['shots'])} storyboard shots."
+            if result.get("ok", True)
+            else result.get("error_message", "AI storyboard rewrite failed.")
+        ),
         data=result,
     )
 
@@ -132,4 +142,12 @@ def optimize_project_story(project_id: str, payload: StoryOptimizationRequest) -
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return ApiResponse(ok=True, message="Story optimization completed.", data=result)
+    return ApiResponse(
+        ok=bool(result.get("ok")),
+        message=(
+            "Story optimization completed."
+            if result.get("ok")
+            else result.get("error_message", "AI story optimization failed.")
+        ),
+        data=result,
+    )

@@ -71,7 +71,14 @@ const feedbackFormatOptions = [
   { value: "short video", labelKey: "feedbackFormatShortVideo" },
 ];
 
-const emptySchedule = () => ({ plan: {}, tasks: [], time_logs: [], feedback: [], reviews: {} });
+const emptySchedule = () => ({
+  plan: {},
+  tasks: [],
+  time_logs: [],
+  feedback: [],
+  reviews: {},
+  project_progress: [],
+});
 
 function normalizeReview(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -87,6 +94,7 @@ function normalizeSchedule(value) {
     time_logs: Array.isArray(data.time_logs) ? data.time_logs : [],
     feedback: Array.isArray(data.feedback) ? data.feedback : [],
     reviews: data.reviews && typeof data.reviews === "object" ? data.reviews : {},
+    project_progress: Array.isArray(data.project_progress) ? data.project_progress : [],
   };
 }
 
@@ -160,8 +168,11 @@ export default function SchedulePage({ currentProject }) {
   );
 
   const stats = useMemo(() => {
-    const total = schedule.tasks.length;
-    const done = schedule.tasks.filter((task) => task.status === "done").length;
+    const progress = schedule.project_progress;
+    const total = progress.length || schedule.tasks.length;
+    const done = progress.length
+      ? progress.filter((item) => item.status === "done").length
+      : schedule.tasks.filter((task) => task.status === "done").length;
     const tracked = schedule.time_logs.reduce(
       (sum, row) => sum + Number(row.minutes || 0),
       0,
@@ -185,13 +196,13 @@ export default function SchedulePage({ currentProject }) {
     };
   }, [schedule]);
 
-  async function run(label, action) {
+  async function run(label, action, successMessage = "") {
     setBusy(label);
     setMessage("");
     try {
       const response = await action();
       await refreshSchedule();
-      setMessage(t("doneMessage"));
+      setMessage(successMessage || response?.message || t("doneMessage"));
       return response;
     } catch (error) {
       setMessage(error.message);
@@ -216,6 +227,7 @@ export default function SchedulePage({ currentProject }) {
           ? planForm.workflow_steps
           : splitList(planForm.workflow_steps),
       }),
+      t("scheduleGeneratedMessage"),
     );
   }
 
@@ -322,6 +334,22 @@ export default function SchedulePage({ currentProject }) {
 
   return (
     <section className="schedule-stack">
+      <section className="panel">
+        <div className="section-heading">
+          <p className="eyebrow">{t("automaticProjectProgress")}</p>
+          <h3>{t("creativeStageBoard")}</h3>
+        </div>
+        <p className="muted">{t("creativeStageBoardHint")}</p>
+        <div className="project-progress-grid">
+          {schedule.project_progress.map((item) => (
+            <article className={`project-progress-item ${item.status}`} key={item.stage}>
+              <span>{t(`projectStage_${item.stage}`)}</span>
+              <strong>{t(`status${item.status[0].toUpperCase()}${item.status.slice(1)}`)}</strong>
+              <small>{item.completed}/{item.total}</small>
+            </article>
+          ))}
+        </div>
+      </section>
       <section className="schedule-stats">
         <div className="panel stat-card">
           <span>{t("completion")}</span>
@@ -345,7 +373,7 @@ export default function SchedulePage({ currentProject }) {
       <section className="content-grid two-col">
         <form className="panel form-panel" onSubmit={handleGeneratePlan}>
           <div className="section-heading">
-            <p className="eyebrow">{t("plan")}</p>
+            <p className="eyebrow">{t("optionalManualPlan")}</p>
             <h3>{t("generateProductionSchedule")}</h3>
           </div>
           <div className="form-row">

@@ -255,9 +255,18 @@ def analyze_bible(project_id: str, payload: ProjectBibleAnalyzeRequest) -> ApiRe
             project_id,
             script=payload.script,
             use_ai=payload.use_ai,
+            replace_existing=payload.replace_existing,
         )
-        if isinstance(result.get("bible"), dict):
+        if result.get("ok") and isinstance(result.get("bible"), dict):
             result["bible"] = save_project_bible(project_id, result["bible"])
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return ApiResponse(ok=True, message="Project bible analyzed.", data=result)
+    return ApiResponse(
+        ok=bool(result.get("ok")),
+        message=(
+            "Project bible analyzed."
+            if result.get("ok")
+            else result.get("error_message", "AI project bible analysis failed.")
+        ),
+        data=result,
+    )

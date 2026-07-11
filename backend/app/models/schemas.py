@@ -146,6 +146,7 @@ class ProjectBiblePayload(BaseModel):
 class ProjectBibleAnalyzeRequest(BaseModel):
     script: str = ""
     use_ai: bool = True
+    replace_existing: bool = False
 
 
 class ExportRequest(BaseModel):
@@ -231,6 +232,7 @@ class StoryOptimizationRequest(BaseModel):
     style: str = "black and white manga storyboard"
     target_platforms: list[str] = []
     use_ai: bool = True
+    output_language: str = "source"
 
 
 class ShotInfo(BaseModel):

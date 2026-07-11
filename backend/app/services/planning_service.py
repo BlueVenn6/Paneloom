@@ -42,24 +42,35 @@ def breakdown_script(payload: ScriptBreakdownRequest) -> dict[str, Any]:
     settings = get_active_settings(include_secret=True)
     errors = validate_text_settings(settings)
     offline = is_offline_mode()
-    if payload.use_ai and not offline and not errors:
+    if not payload.use_ai:
+        return {"ok": True, "source": "local", "shots": _breakdown_locally(payload), "warnings": []}
+    if not offline and not errors:
         ai_result = _breakdown_with_ai(get_text_api_config(settings), payload)
         if ai_result["shots"]:
             return {
+                "ok": True,
                 "source": "ai",
                 "shots": ai_result["shots"],
                 "warnings": ai_result["warnings"],
             }
 
-    fallback_shots = _breakdown_locally(payload)
-    warnings = []
-    if payload.use_ai and offline:
-        warnings.append("Cloud AI is unavailable in offline mode; local storyboard split was used.")
-    elif payload.use_ai and errors:
-        warnings.append("Text model was skipped because API settings are incomplete.")
-    elif payload.use_ai:
-        warnings.append("Text model did not return usable storyboard JSON; local split was used.")
-    return {"source": "local", "shots": fallback_shots, "warnings": warnings}
+    if offline:
+        message = "Cloud AI is unavailable in offline mode."
+        error = "offline_mode"
+    elif errors:
+        message = " ".join(errors)
+        error = "configuration_error"
+    else:
+        message = "Text model did not return usable storyboard JSON."
+        error = "invalid_model_output"
+    return {
+        "ok": False,
+        "source": "ai",
+        "shots": [],
+        "warnings": [],
+        "error": error,
+        "error_message": message,
+    }
 
 
 def rewrite_existing_storyboard(project_id: str, payload: ShotRewriteRequest) -> dict[str, Any]:
@@ -80,6 +91,8 @@ def rewrite_existing_storyboard(project_id: str, payload: ShotRewriteRequest) ->
             use_ai=payload.use_ai,
         )
     )
+    if not breakdown.get("ok", True):
+        return breakdown
     rewritten = []
     for original, next_shot in zip(existing_shots, breakdown["shots"]):
         updates = {
@@ -106,6 +119,7 @@ def rewrite_existing_storyboard(project_id: str, payload: ShotRewriteRequest) ->
     if len(rewritten) < len(existing_shots):
         warnings.append("Fewer rewritten panels were returned than existing shots; remaining shots were left unchanged.")
     return {
+        "ok": True,
         "source": breakdown.get("source", "local"),
         "warnings": warnings,
         "shots": rewritten,

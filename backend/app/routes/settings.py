@@ -1,4 +1,8 @@
-import requests
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from time import perf_counter
+
 from fastapi import APIRouter, HTTPException
 
 from backend.app.config import (
@@ -12,6 +16,9 @@ from backend.app.config import (
     validate_text_settings,
 )
 from backend.app.models.schemas import ApiResponse, SettingsPayload
+
+from api.openai_image_client import generate_image
+from api.openai_text_client import generate_text
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -69,147 +76,85 @@ def test_settings(payload: SettingsPayload | None = None) -> ApiResponse:
     image_errors = validate_api_settings(settings)
     text_errors = validate_text_settings(settings)
 
-    image_result = {"ok": False, "errors": image_errors}
-    if not image_errors:
-        image_result = _test_image_connection(settings)
     text_config = get_text_api_config(settings)
-    text_result = {"ok": False, "errors": text_errors, "provider": text_config["provider"]}
-    if not text_errors:
-        if text_config["provider"] == "google" and text_config["mode"] == "native":
-            text_result = _test_google_native_models(text_config)
-        else:
-            text_result = _test_openai_compatible_models(
-                base_url=text_config["base_url"],
-                api_key=text_config["api_key"],
-                model=text_config["model"],
-            )
-            text_result["provider"] = text_config["provider"]
+    image_result = {"ok": False, "status": "failed", "errors": image_errors}
+    text_result = {
+        "ok": False,
+        "status": "failed",
+        "errors": text_errors,
+        "provider": text_config["provider"],
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        image_future = executor.submit(_test_image_generation, settings) if not image_errors else None
+        text_future = executor.submit(_test_text_inference, text_config) if not text_errors else None
+        if image_future:
+            image_result = image_future.result()
+        if text_future:
+            text_result = text_future.result()
 
     ok = bool(image_result.get("ok")) and bool(text_result.get("ok"))
     return ApiResponse(
         ok=ok,
-        message="Connection tests completed.",
+        message="Real provider tests completed.",
         data={"source": source, "image": image_result, "text": text_result},
     )
 
-
-def _test_image_connection(settings: dict) -> dict:
-    result = _test_openai_compatible_models(
-        base_url=settings["base_url"],
-        api_key=settings["api_key"],
-        model=settings.get("image_model", ""),
+def _test_text_inference(config: dict) -> dict:
+    started = perf_counter()
+    result = generate_text(
+        config,
+        system_prompt="You are a connection test. Follow the user instruction exactly.",
+        user_prompt="Reply with exactly: OK",
+        temperature=0,
+        max_output_tokens=8,
     )
-    result.setdefault("validation_level", "models" if result.get("ok") else "failed")
-    if result.get("ok") or settings.get("provider_type") != "custom":
-        return result
-
-    provider_message = " ".join(_connection_error_text(item) for item in result.get("errors", []))
-    if "only accepts image api paths" not in provider_message.lower():
-        return result
+    elapsed = round(perf_counter() - started, 2)
+    text = str(result.get("text") or "").strip()
+    ok = bool(result.get("ok") and text)
     return {
-        "ok": True,
+        "ok": ok,
+        "status": "passed" if ok else "failed",
+        "validation_level": "real_inference",
+        "provider": config.get("provider", ""),
+        "model": config.get("model", ""),
         "status_code": result.get("status_code"),
-        "checked_url": result.get("checked_url"),
-        "model": settings.get("image_model", ""),
-        "model_found": None,
-        "models_checked": 0,
-        "validation_level": "endpoint_only",
-        "warnings": [
-            "Image service is reachable but does not support model-list checks. "
-            "The API key and model will be verified by the first real generation."
-        ],
-        "errors": [],
+        "duration_seconds": elapsed,
+        "response_preview": text[:40] if ok else "",
+        "errors": [] if ok else [_provider_result_error(result, "Text model did not return text.")],
     }
 
 
-def _test_openai_compatible_models(base_url: str, api_key: str, model: str) -> dict:
-    checked_url = f"{base_url.rstrip('/')}/models"
-    try:
-        response = requests.get(checked_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
-        if response.status_code == 404 and not base_url.rstrip("/").endswith("/v1"):
-            checked_url = f"{base_url.rstrip('/')}/v1/models"
-            response = requests.get(
-                checked_url,
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
-            )
-        try:
-            body = response.json()
-        except ValueError:
-            body = {"text": response.text}
-    except requests.RequestException as exc:
-        return {"ok": False, "errors": [str(exc)]}
-
-    if response.status_code >= 400:
-        return {
-            "ok": False,
-            "status_code": response.status_code,
-            "checked_url": checked_url,
-            "errors": [_connection_error_text(body, response.status_code)],
-        }
-
-    model_ids = [
-        item.get("id")
-        for item in body.get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
-    model_found = model in model_ids if model_ids else None
-    return {
-        "ok": model_found is not False,
-        "status_code": response.status_code,
-        "checked_url": checked_url,
-        "model": model,
-        "model_found": model_found,
-        "models_checked": len(model_ids),
-        "errors": [] if model_found is not False else ["Configured model was not found."],
-    }
-
-
-def _connection_error_text(value: object, status_code: int | None = None) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        nested_error = value.get("error")
-        if isinstance(nested_error, dict) and nested_error.get("message"):
-            return str(nested_error["message"])
-        for key in ("message", "detail", "text"):
-            if value.get(key):
-                return str(value[key])
-    return f"HTTP {status_code or 'error'} returned by the provider."
-
-
-def _test_google_native_models(config: dict) -> dict:
-    try:
-        response = requests.get(
-            f"{config['base_url'].rstrip('/')}/models",
-            params={"key": config["api_key"]},
-            timeout=30,
+def _test_image_generation(settings: dict) -> dict:
+    started = perf_counter()
+    with TemporaryDirectory(prefix="paneloom-image-test-") as directory:
+        output_path = Path(directory) / "provider-test.png"
+        result = generate_image(
+            settings,
+            prompt="A plain white circle centered on a solid black background. No text.",
+            size="1024x1024",
+            quality="low",
+            output_path=output_path,
         )
-        try:
-            body = response.json()
-        except ValueError:
-            body = {"text": response.text}
-    except requests.RequestException as exc:
-        return {"ok": False, "provider": "google", "errors": [str(exc)]}
-    if response.status_code >= 400:
-        return {
-            "ok": False,
-            "provider": "google",
-            "status_code": response.status_code,
-            "errors": [body],
-        }
-    model_names = [
-        str(item.get("name", "")).split("/")[-1]
-        for item in body.get("models", [])
-        if isinstance(item, dict)
-    ]
-    model_found = config["model"] in model_names if model_names else None
+        saved = output_path.is_file() and output_path.stat().st_size > 0
+    elapsed = round(perf_counter() - started, 2)
+    ok = bool(result.get("ok") and saved)
     return {
-        "ok": model_found is not False,
-        "provider": "google",
-        "status_code": response.status_code,
-        "model": config["model"],
-        "model_found": model_found,
-        "models_checked": len(model_names),
-        "errors": [] if model_found is not False else ["Configured model was not found."],
+        "ok": ok,
+        "status": "passed" if ok else "failed",
+        "validation_level": "real_generation",
+        "model": settings.get("image_model", ""),
+        "status_code": result.get("status_code"),
+        "duration_seconds": elapsed,
+        "output_verified": saved,
+        "errors": [] if ok else [_provider_result_error(result, "Image model did not return a valid image file.")],
     }
+
+
+def _provider_result_error(result: dict, fallback: str) -> str:
+    return str(
+        result.get("error_message")
+        or result.get("exception_message")
+        or result.get("error")
+        or result.get("short_error")
+        or fallback
+    )

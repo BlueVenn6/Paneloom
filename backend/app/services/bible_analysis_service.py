@@ -29,36 +29,65 @@ Write in the same main language as the source material when possible.
 Do not invent excessive lore if the script does not support it."""
 
 
-def analyze_project_bible(project_id: str, script: str = "", use_ai: bool = True) -> dict[str, Any]:
+def analyze_project_bible(
+    project_id: str,
+    script: str = "",
+    use_ai: bool = True,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
     current_bible = get_project_bible(project_id)
+    analysis_bible = (
+        {
+            "visual_style": current_bible.get("visual_style", ""),
+            "negative_prompt": current_bible.get("negative_prompt", ""),
+        }
+        if replace_existing
+        else current_bible
+    )
     shots = list_shots(project_id)
-    source_text = _build_source_text(script, shots)
+    source_text = _build_source_text(script, [] if script.strip() else shots)
     warnings: list[str] = []
 
     if use_ai and not is_offline_mode():
         settings = get_active_settings(include_secret=True)
         errors = validate_text_settings(settings)
         if not errors and source_text.strip():
-            ai_bible = _analyze_with_ai(get_text_api_config(settings), current_bible, source_text)
+            ai_bible = _analyze_with_ai(get_text_api_config(settings), analysis_bible, source_text)
             if ai_bible["bible"]:
                 return {
+                    "ok": True,
                     "source": "ai",
                     "warnings": ai_bible["warnings"],
-                    "bible": {**current_bible, **ai_bible["bible"]},
+                    "bible": {**analysis_bible, **ai_bible["bible"]},
                 }
             warnings.extend(ai_bible["warnings"])
         elif errors:
             warnings.append("Text model was skipped because API settings are incomplete.")
 
-    if use_ai and is_offline_mode():
-        warnings.append("Cloud AI is unavailable in offline mode; local analysis was used.")
-    local_bible = _analyze_locally(current_bible, source_text)
-    if use_ai and not warnings:
-        warnings.append("Text model did not return usable project bible JSON; local analysis was used.")
+    if use_ai:
+        if is_offline_mode():
+            message = "Cloud AI is unavailable in offline mode."
+            error = "offline_mode"
+        elif warnings:
+            message = " ".join(warnings)
+            error = "text_generation_failed"
+        else:
+            message = "Text model settings are incomplete or the script is empty."
+            error = "configuration_error"
+        return {
+            "ok": False,
+            "source": "ai",
+            "warnings": warnings,
+            "error": error,
+            "error_message": message,
+            "bible": {},
+        }
+    local_bible = _analyze_locally(analysis_bible, source_text)
     return {
+        "ok": True,
         "source": "local",
         "warnings": warnings,
-        "bible": {**current_bible, **local_bible},
+        "bible": {**analysis_bible, **local_bible},
     }
 
 

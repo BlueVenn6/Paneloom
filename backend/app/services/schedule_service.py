@@ -14,7 +14,14 @@ from backend.app.models.schemas import (
     SocialFeedbackCreate,
     TimeLogCreate,
 )
-from backend.app.services.project_service import get_project_dir, require_project, utc_now
+from backend.app.services.project_service import (
+    get_project_bible,
+    get_project_dir,
+    get_project_reference_dir,
+    get_project_workspace,
+    require_project,
+    utc_now,
+)
 from backend.app.services.shotlist_service import list_shots
 
 DEFAULT_WORKFLOW = ["script", "storyboard", "image", "edit", "copy", "publish"]
@@ -82,7 +89,81 @@ def get_schedule(project_id: str) -> dict:
             "week": _read_json(_review_path(project_id, "week"), {}),
             "month": _read_json(_review_path(project_id, "month"), {}),
         },
+        "project_progress": _project_progress(project_id),
     }
+
+
+def _project_progress(project_id: str) -> list[dict]:
+    workspace = get_project_workspace(project_id)
+    bible = get_project_bible(project_id)
+    shots = list_shots(project_id)
+    import_state = workspace.get("script_import") if isinstance(workspace.get("script_import"), dict) else {}
+    reference_count = len(
+        [path for path in get_project_reference_dir(project_id).glob("*") if path.is_file()]
+    )
+    generated_count = sum(
+        1
+        for shot in shots
+        if shot.get("output_path") or shot.get("output_url") or shot.get("selected_version_id")
+    )
+    locked_count = sum(1 for shot in shots if shot.get("locked"))
+    failed_count = sum(1 for shot in shots if shot.get("status") == "failed")
+    export_dir = get_project_dir(project_id) / "exports"
+    export_count = len([path for path in export_dir.glob("*") if path.is_file()]) if export_dir.exists() else 0
+    bible_fields = [bible.get("characters"), bible.get("locations"), bible.get("world_notes")]
+
+    def stage(stage_id: str, status: str, completed: int, total: int, detail: str) -> dict:
+        return {
+            "stage": stage_id,
+            "status": status,
+            "completed": completed,
+            "total": total,
+            "detail": detail,
+            "source": "project_state",
+        }
+
+    script_done = bool(str(workspace.get("script") or "").strip())
+    has_import = bool(import_state)
+    bible_current = import_state.get("bibleCurrent") is True if has_import else True
+    storyboard_current = import_state.get("storyboardCurrent") is True if has_import else True
+    bible_done = all(str(value or "").strip() for value in bible_fields) and bible_current
+    storyboard_stale = bool(shots) and not storyboard_current
+    storyboard_done = bool(shots) and not storyboard_stale
+    image_status = (
+        "done"
+        if shots and generated_count == len(shots)
+        else "blocked"
+        if failed_count and generated_count == 0
+        else "doing"
+        if generated_count or any(shot.get("status") == "generating" for shot in shots)
+        else "todo"
+    )
+    return [
+        stage("script", "done" if script_done else "todo", int(script_done), 1, "workspace.script"),
+        stage(
+            "bible",
+            "done" if bible_done else "doing" if any(bible_fields) or reference_count else "todo",
+            sum(1 for value in bible_fields if str(value or "").strip()),
+            len(bible_fields),
+            f"references:{reference_count}",
+        ),
+        stage(
+            "storyboard",
+            "done" if storyboard_done else "blocked" if storyboard_stale else "todo",
+            len(shots) if storyboard_done else 0,
+            max(1, len(shots)),
+            "stale_after_script_change" if storyboard_stale else f"shots:{len(shots)}",
+        ),
+        stage("image", image_status, generated_count, len(shots), f"failed:{failed_count}"),
+        stage(
+            "lock",
+            "done" if shots and locked_count == len(shots) else "doing" if locked_count else "todo",
+            locked_count,
+            len(shots),
+            "shot_lock_state",
+        ),
+        stage("export", "done" if export_count else "todo", export_count, 1, f"exports:{export_count}"),
+    ]
 
 
 def generate_schedule(project_id: str, payload: SchedulePlanRequest) -> dict:

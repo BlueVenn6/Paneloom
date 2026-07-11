@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from threading import Lock
 from pathlib import Path
@@ -1324,10 +1325,8 @@ def generate_reference_concepts(
     prompts = _reference_concept_prompts(bible, script, refinement_prompt)
     references: list[dict] = []
     errors: list[str] = []
-    for category in categories:
-        prompt = prompts.get(category)
-        if not prompt:
-            continue
+
+    def generate_category(category: str, prompt: str) -> tuple[dict | None, str]:
         filename = f"project-reference-{category}-{_generation_stamp()}.png"
         output_path = output_dir / filename
         result = generate_image(
@@ -1338,46 +1337,57 @@ def generate_reference_concepts(
             output_path=output_path,
         )
         if result.get("ok") and result.get("output_path"):
-            references.append(
+            return (
                 {
                     "filename": filename,
                     "path": to_project_relative_path(project_id, output_path),
                     "url": project_file_url(project_id, "references", filename),
                     "category": category,
-                }
-            )
-        else:
-            detail = (
-                result.get("error_message")
-                or result.get("error")
-                or result.get("short_error")
-                or result.get("error_code")
-                or category
-            )
-            _log_failure(
-                project_id,
-                {
-                    "timestamp": utc_now(),
-                    "project_id": project_id,
-                    "shot_id": f"reference-{category}",
-                    "prompt": prompt,
-                    "endpoint": result.get("endpoint", ""),
-                    "model": result.get("model", ""),
-                    "status_code": result.get("status_code", ""),
-                    "error_type": result.get("error_type", ""),
-                    "error_code": result.get("provider_error_code") or result.get("error_code", ""),
-                    "short_error": result.get("error_code", ""),
-                    "error_message": detail,
-                    "exception_type": result.get("exception_type", ""),
-                    "exception_message": result.get("exception_message", ""),
-                    "raw_response": result.get("raw_response", ""),
                 },
+                "",
             )
-            errors.append(f"{category}: {detail}")
+        detail = (
+            result.get("error_message")
+            or result.get("error")
+            or result.get("short_error")
+            or result.get("error_code")
+            or category
+        )
+        _log_failure(
+            project_id,
+            {
+                "timestamp": utc_now(),
+                "project_id": project_id,
+                "shot_id": f"reference-{category}",
+                "prompt": prompt,
+                "endpoint": result.get("endpoint", ""),
+                "model": result.get("model", ""),
+                "status_code": result.get("status_code", ""),
+                "error_type": result.get("error_type", ""),
+                "error_code": result.get("provider_error_code") or result.get("error_code", ""),
+                "short_error": result.get("error_code", ""),
+                "error_message": detail,
+                "exception_type": result.get("exception_type", ""),
+                "exception_message": result.get("exception_message", ""),
+                "raw_response": result.get("raw_response", ""),
+            },
+        )
+        return None, f"{category}: {detail}"
+
+    work = [(category, prompts.get(category)) for category in categories if prompts.get(category)]
+    with ThreadPoolExecutor(max_workers=min(2, max(1, len(work)))) as executor:
+        futures = {executor.submit(generate_category, category, prompt): category for category, prompt in work}
+        for future in as_completed(futures):
+            reference, error = future.result()
+            if reference:
+                references.append(reference)
+            if error:
+                errors.append(error)
+    references.sort(key=lambda item: categories.index(item["category"]))
 
     return {
         "project_id": project_id,
-        "status": "done" if references else "failed",
+        "status": "done" if references and not errors else "partial" if references else "failed",
         "references": references,
         "errors": errors,
         "error": "" if references else "reference_generation_failed",

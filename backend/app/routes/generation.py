@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -50,11 +51,22 @@ def _prune_jobs(jobs: dict[str, dict]) -> None:
 
 
 def _job_snapshot(job_id: str) -> dict:
-    return dict(_GENERATION_JOBS.get(job_id, {}))
+    return _safe_job_snapshot(_GENERATION_JOBS.get(job_id, {}))
 
 
 def _reference_job_snapshot(job_id: str) -> dict:
-    return dict(_REFERENCE_JOBS.get(job_id, {}))
+    return _safe_job_snapshot(_REFERENCE_JOBS.get(job_id, {}))
+
+
+def _safe_job_snapshot(job: dict) -> dict:
+    snapshot = {key: value for key, value in job.items() if not key.startswith("_")}
+    started = job.get("_started_monotonic")
+    if started:
+        snapshot["duration_seconds"] = round(
+            job.get("duration_seconds") or (time.monotonic() - started),
+            1,
+        )
+    return snapshot
 
 
 def interrupt_active_jobs_for_desktop_shutdown() -> bool:
@@ -92,7 +104,7 @@ def _run_generation_job(job_id: str, project_id: str, shot_id: str, payload: Ima
     )
     try:
         result = generate_shot_image(project_id, shot_id, payload)
-        ok = result.get("status") in {"done", "generated", "generated_url_download_failed"}
+        ok = result.get("status") == "done" and bool(result.get("output_path") or result.get("outputs"))
         job.update(
             {
                 "status": "done" if ok else "failed",
@@ -101,6 +113,7 @@ def _run_generation_job(job_id: str, project_id: str, shot_id: str, payload: Ima
                 "error": "",
                 "error_message": "",
                 "updated_at": utc_now(),
+                "duration_seconds": round(time.monotonic() - job["_started_monotonic"], 1),
             }
         )
     except Exception as exc:  # noqa: BLE001 - keep background job observable in the UI
@@ -112,6 +125,7 @@ def _run_generation_job(job_id: str, project_id: str, shot_id: str, payload: Ima
                 "error": type(exc).__name__,
                 "error_message": str(exc),
                 "updated_at": utc_now(),
+                "duration_seconds": round(time.monotonic() - job["_started_monotonic"], 1),
             }
         )
 
@@ -132,15 +146,22 @@ def _run_reference_job(job_id: str, project_id: str, payload: ReferenceConceptRe
             categories=payload.categories,
             refinement_prompt=payload.refinement_prompt,
         )
-        ok = result.get("status") == "done"
+        ok = result.get("status") in {"done", "partial"}
         job.update(
             {
                 "status": "done" if ok else "failed",
-                "progress": "completed" if ok else "failed",
+                "progress": (
+                    "completed_with_errors"
+                    if result.get("status") == "partial"
+                    else "completed"
+                    if ok
+                    else "failed"
+                ),
                 "result": result,
                 "error": result.get("error", "") if not ok else "",
                 "error_message": result.get("error_message", "") if not ok else "",
                 "updated_at": utc_now(),
+                "duration_seconds": round(time.monotonic() - job["_started_monotonic"], 1),
             }
         )
     except Exception as exc:  # noqa: BLE001 - keep background job observable in the UI
@@ -152,6 +173,7 @@ def _run_reference_job(job_id: str, project_id: str, payload: ReferenceConceptRe
                 "error": type(exc).__name__,
                 "error_message": str(exc),
                 "updated_at": utc_now(),
+                "duration_seconds": round(time.monotonic() - job["_started_monotonic"], 1),
             }
         )
 
@@ -237,7 +259,7 @@ def generate_reference_concept_images(
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    ok = result.get("status") == "done"
+    ok = result.get("status") in {"done", "partial"}
     return ApiResponse(
         ok=ok,
         message="Reference concepts generated." if ok else result.get("error", "reference_generation_failed"),
@@ -266,6 +288,7 @@ def start_reference_concept_job(
         "error_message": "",
         "created_at": utc_now(),
         "updated_at": utc_now(),
+        "_started_monotonic": time.monotonic(),
     }
     _GENERATION_EXECUTOR.submit(_run_reference_job, job_id, project_id, payload)
     return ApiResponse(ok=True, message="Reference generation job started.", data=_reference_job_snapshot(job_id))
@@ -326,7 +349,7 @@ def generate_single_shot(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     status = result.get("status")
-    ok = status in {"done", "generated", "generated_url_download_failed"}
+    ok = status == "done" and bool(result.get("output_path") or result.get("outputs"))
     if status == "generated_url_download_failed":
         message = "Image URL returned, but local download failed."
     elif ok:
@@ -368,6 +391,7 @@ def start_generation_job(
         "error_message": "",
         "created_at": utc_now(),
         "updated_at": utc_now(),
+        "_started_monotonic": time.monotonic(),
     }
     _GENERATION_EXECUTOR.submit(_run_generation_job, job_id, project_id, shot_id, request_payload)
     return ApiResponse(ok=True, message="Generation job started.", data=_job_snapshot(job_id))

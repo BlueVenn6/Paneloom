@@ -276,8 +276,9 @@ class ProjectPortabilityTests(unittest.TestCase):
             local_story = optimize_story(
                 StoryOptimizationRequest(script="A short offline story", use_ai=True)
             )
-            self.assertEqual(local_story["source"], "local")
-            self.assertTrue(any("offline" in warning.lower() for warning in local_story["warnings"]))
+            self.assertFalse(local_story["ok"])
+            self.assertEqual(local_story["source"], "ai")
+            self.assertEqual(local_story["error"], "offline_mode")
             exported = export_service.export_project(project_id, "json")
             self.assertTrue(
                 project_service.resolve_project_path(project_id, exported["path"]).is_file()

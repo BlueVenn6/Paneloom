@@ -244,7 +244,7 @@ function sleep(ms) {
 }
 
 export default function StoryboardPage({ currentProject, cloudAiAvailable = true }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [shots, setShots] = useState([]);
   const [references, setReferences] = useState([]);
   const [aspectPresets, setAspectPresets] = useState([]);
@@ -440,10 +440,27 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         use_ai: workspace.use_ai ?? true,
       }));
       setStoryGoal(workspace.story_goal || "");
-      setStoryAdvice(workspace.story_optimization || null);
-      setScriptImportInfo(
+      const savedAdvice = workspace.story_optimization || null;
+      setStoryAdvice(
+        savedAdvice
+          ? { ...savedAdvice, stale: savedAdvice.stale === true || savedAdvice.source !== "ai" }
+          : null,
+      );
+      const savedImport =
         workspace.script_import && Object.keys(workspace.script_import).length > 0
           ? workspace.script_import
+          : null;
+      setScriptImportInfo(
+        savedImport
+          ? {
+              ...savedImport,
+              warnings: Array.isArray(savedImport.warnings) ? savedImport.warnings : [],
+              // Legacy imports did not record derivation freshness. Treat them as
+              // stale until the current script is explicitly analyzed again.
+              optimizationCurrent: savedImport.optimizationCurrent === true,
+              bibleCurrent: savedImport.bibleCurrent === true,
+              storyboardCurrent: savedImport.storyboardCurrent === true,
+            }
           : null,
       );
       setScriptVersions(
@@ -520,11 +537,6 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     [shots],
   );
 
-  useEffect(() => {
-    if (!cloudAiAvailable) {
-      setScriptForm((current) => ({ ...current, use_ai: false }));
-    }
-  }, [cloudAiAvailable]);
   const queueableShots = useMemo(
     () =>
       shots.filter((shot) =>
@@ -545,13 +557,28 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         setMessage(errorMessage);
         return response;
       }
-      setMessage(response?.localizedMessage || t("doneMessage"));
+      setMessage(response?.localizedMessage || response?.message || t("doneMessage"));
       return response;
     } catch (error) {
       setMessage(error.message);
       return null;
     } finally {
       setBusy("");
+    }
+  }
+
+  function handleScriptTextChange(value) {
+    setScriptForm((current) => ({ ...current, script: value }));
+    if (storyAdvice && !storyAdvice.stale) {
+      setStoryAdvice((current) => (current ? { ...current, stale: true } : current));
+    }
+    if (scriptImportInfo) {
+      setScriptImportInfo((current) => ({
+        ...current,
+        optimizationCurrent: false,
+        bibleCurrent: false,
+        storyboardCurrent: false,
+      }));
     }
   }
 
@@ -599,6 +626,14 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         panel_gutter_style: panelGutterStyle,
         target_panel_count: Number(scriptForm.target_panel_count) || 8,
       });
+      if (!response.ok) return response;
+      const nextImportInfo = scriptImportInfo
+        ? { ...scriptImportInfo, storyboardCurrent: true }
+        : scriptImportInfo;
+      if (nextImportInfo) {
+        setScriptImportInfo(nextImportInfo);
+        await saveWorkspace({ script_import: nextImportInfo });
+      }
       const source = response.data?.source === "ai" ? t("sourceAi") : t("sourceLocal");
       const warnings = response.data?.warnings || [];
       return {
@@ -648,10 +683,20 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         goal: storyGoal,
         style: savedBible.visual_style || scriptForm.style,
         target_platforms: targetPlatforms,
-        use_ai: scriptForm.use_ai,
+        use_ai: true,
+        output_language: locale,
       });
-      setStoryAdvice(response.data || null);
-      await saveWorkspace({ story_optimization: response.data || null });
+      if (!response.ok) return response;
+      const nextAdvice = { ...(response.data || {}), stale: false };
+      const nextImportInfo = scriptImportInfo
+        ? { ...scriptImportInfo, optimizationCurrent: true }
+        : scriptImportInfo;
+      setStoryAdvice(nextAdvice);
+      if (nextImportInfo) setScriptImportInfo(nextImportInfo);
+      await saveWorkspace({
+        story_optimization: nextAdvice,
+        ...(nextImportInfo ? { script_import: nextImportInfo } : {}),
+      });
       return {
         ...response,
         localizedMessage: `${t("storyboardStrategy")} · ${
@@ -662,7 +707,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   }
 
   async function applyOptimizedScript() {
-    if (!storyAdvice?.improved_script) return;
+    if (!storyAdvice?.improved_script || storyAdvice.stale || storyAdvice.source !== "ai") return;
     const nextVersions = scriptForm.script
       ? [
           ...scriptVersions,
@@ -729,8 +774,10 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     await run("analyze-bible", async () => {
       const response = await api.analyzeProjectBible(currentProject.project_id, {
         script: scriptForm.script,
-        use_ai: scriptForm.use_ai,
+        use_ai: true,
+        replace_existing: scriptImportInfo?.bibleCurrent === false,
       });
+      if (!response.ok) return response;
       if (response.data?.bible) {
         const nextBible = {
           ...defaultBible,
@@ -741,6 +788,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         setScriptForm((current) => ({ ...current, style: nextBible.visual_style || current.style }));
       }
       const warnings = response.data?.warnings || [];
+      const nextImportInfo = scriptImportInfo
+        ? { ...scriptImportInfo, bibleCurrent: true }
+        : scriptImportInfo;
+      if (nextImportInfo) {
+        setScriptImportInfo(nextImportInfo);
+        await saveWorkspace({ script_import: nextImportInfo });
+      }
       return {
         ...response,
         message:
@@ -759,6 +813,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     await run(label, async () => {
       let currentBible = await syncBibleBeforeGeneration();
       const shouldAnalyzeBeforeAssets =
+        scriptImportInfo?.bibleCurrent === false ||
         !currentBible.characters?.trim() ||
         !currentBible.locations?.trim() ||
         !currentBible.world_notes?.trim() ||
@@ -766,8 +821,10 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       if (shouldAnalyzeBeforeAssets) {
         const bibleResponse = await api.analyzeProjectBible(currentProject.project_id, {
           script: scriptForm.script,
-          use_ai: scriptForm.use_ai,
+          use_ai: true,
+          replace_existing: scriptImportInfo?.bibleCurrent === false,
         });
+        if (!bibleResponse.ok) return bibleResponse;
         if (bibleResponse.data?.bible) {
           currentBible = {
             ...defaultBible,
@@ -780,6 +837,11 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
             ...current,
             style: currentBible.visual_style || current.style,
           }));
+        }
+        if (scriptImportInfo) {
+          const nextImportInfo = { ...scriptImportInfo, bibleCurrent: true };
+          setScriptImportInfo(nextImportInfo);
+          await saveWorkspace({ script_import: nextImportInfo });
         }
       }
       const startResponse = await api.startReferenceConceptJob(currentProject.project_id, {
@@ -802,12 +864,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         const job = jobResponse.data || {};
         await refreshAll().catch(() => {});
         if (job.status === "queued") {
-          setMessage(`${t("referenceProgressQueued")} · ${jobId}`);
+          setMessage(`${t("referenceProgressQueued")} · ${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "running") {
-          setMessage(`${t("referenceProgressRunning")} · ${jobId}`);
+          setMessage(`${t("referenceProgressRunning")} · ${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "done" || job.status === "failed") {
           response = {
             ok: job.status === "done",
+            duration_seconds: job.duration_seconds,
             message: job.error_message || job.error || jobResponse.message,
             data: job.result || {
               error_message: job.error_message,
@@ -825,9 +888,12 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       if (!response.ok) {
         return response;
       }
+      const generationErrors = Array.isArray(response.data?.errors) ? response.data.errors : [];
       return {
         ...response,
-        localizedMessage: `${t("referenceProgressDone")} ${filenames.length}`,
+        localizedMessage: `${t("referenceProgressDone")} ${filenames.length} · ${response.duration_seconds || 0}s${
+          generationErrors.length ? ` · ${generationErrors.join("; ")}` : ""
+        }`,
       };
     });
   }
@@ -869,6 +935,10 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   }
 
   async function generateOneShot(shotId) {
+    if (scriptImportInfo?.storyboardCurrent === false) {
+      setMessage(t("storyboardStaleGenerationBlocked"));
+      return false;
+    }
     setBusyShotId(shotId);
     setMessage("");
     setShotErrors((current) => ({ ...current, [shotId]: "" }));
@@ -904,13 +974,14 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         const job = response.data || {};
         await refreshAll().catch(() => {});
         if (job.status === "queued") {
-          setShotProgressStage(shotId, "generationProgressQueued", jobId);
+          setShotProgressStage(shotId, "generationProgressQueued", `${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "running") {
           mergeShotUpdate(shotId, { status: "generating", generation_error: "" });
-          setShotProgressStage(shotId, "generationProgressSubmitting", jobId);
+          setShotProgressStage(shotId, "generationProgressSubmitting", `${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "done" || job.status === "failed") {
           response = {
             ok: job.status === "done",
+            duration_seconds: job.duration_seconds,
             message: job.error_message || job.error || response.message,
             data: job.result || {
               error_message: job.error_message,
@@ -949,7 +1020,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         download_error: response.data?.download_error || "",
       });
       setShotProgressStage(shotId, "generationProgressDone", response.data?.output_url || "");
-      setMessage(t("imageGenerated"));
+      setMessage(`${t("imageGenerated")} · ${response.duration_seconds || 0}s`);
       return true;
     } catch (error) {
       await refreshAll().catch(() => {});
@@ -971,6 +1042,10 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   }
 
   async function enqueueGeneration(shotIds) {
+    if (scriptImportInfo?.storyboardCurrent === false) {
+      setMessage(t("storyboardStaleGenerationBlocked"));
+      return;
+    }
     const nextIds = shotIds.filter(
       (shotId) =>
         shotId &&
@@ -1137,6 +1212,9 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         filename: result.filename || file.name,
         characterCount: result.character_count || 0,
         warnings: Array.isArray(result.warnings) ? result.warnings : [],
+        optimizationCurrent: false,
+        bibleCurrent: false,
+        storyboardCurrent: false,
       };
       const nextVersions = scriptForm.script
         ? [
@@ -1149,6 +1227,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           ].slice(-20)
         : scriptVersions;
       setScriptForm((current) => ({ ...current, script: result.text || "" }));
+      setStoryAdvice(null);
+      setSelectedReferences([]);
       setScriptVersions(nextVersions);
       const warnings = importInfo.warnings;
       setScriptImportInfo(importInfo);
@@ -1156,6 +1236,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         script: result.text || "",
         script_import: importInfo,
         script_versions: nextVersions,
+        story_optimization: null,
+        selected_reference_filenames: [],
       });
       setMessage(
         `${t("scriptImportSuccess")} ${result.filename || file.name} · ${
@@ -1357,9 +1439,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           <textarea
             required
             value={scriptForm.script}
-            onChange={(event) =>
-              setScriptForm({ ...scriptForm, script: event.target.value })
-            }
+            onChange={(event) => handleScriptTextChange(event.target.value)}
             rows={5}
             placeholder={t("scriptPlaceholder")}
           />
@@ -1377,13 +1457,20 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           <p className="muted">{t("supportedScriptFormats")}</p>
           {busy === "script-import" && <p className="form-message">{t("scriptImporting")}</p>}
           {scriptImportInfo && (
-            <p className="form-message">
-              {t("scriptImportedFile")} {scriptImportInfo.filename} ·{" "}
-              {scriptImportInfo.characterCount} {t("charactersExtracted")}
-              {scriptImportInfo.warnings.length > 0
-                ? ` · ${scriptImportInfo.warnings.join(" ")}`
-                : ""}
-            </p>
+            <>
+              <p className="form-message">
+                {t("scriptImportedFile")} {scriptImportInfo.filename} ·{" "}
+                {scriptImportInfo.characterCount} {t("charactersExtracted")}
+                {scriptImportInfo.warnings.length > 0
+                  ? ` · ${scriptImportInfo.warnings.join(" ")}`
+                  : ""}
+              </p>
+              {(scriptImportInfo.optimizationCurrent === false ||
+                scriptImportInfo.bibleCurrent === false ||
+                scriptImportInfo.storyboardCurrent === false) && (
+                <div className="alert error">{t("newScriptDerivedDataStale")}</div>
+              )}
+            </>
           )}
         </div>
         <section className="story-advice-panel">
@@ -1412,7 +1499,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
             </button>
             <button
               className="secondary"
-              disabled={!storyAdvice?.improved_script}
+              disabled={!storyAdvice?.improved_script || storyAdvice.stale || storyAdvice.source !== "ai"}
               onClick={applyOptimizedScript}
               type="button"
             >
@@ -1420,7 +1507,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
             </button>
             <button
               className="secondary"
-              disabled={!storyAdvice?.recommended_panel_count}
+              disabled={!storyAdvice?.recommended_panel_count || storyAdvice.stale}
               onClick={applyRecommendedPanels}
               type="button"
             >
@@ -1445,6 +1532,14 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           </div>
           {storyAdvice ? (
             <div className="story-advice-result">
+              {storyAdvice.stale && <div className="alert error">{t("storyOptimizationStale")}</div>}
+              <p className="form-message">
+                {t("aiResultEvidence")}: {storyAdvice.source === "ai" ? t("sourceAi") : t("sourceLocal")}
+                {storyAdvice.provider ? ` · ${storyAdvice.provider}` : ""}
+                {storyAdvice.model ? ` · ${storyAdvice.model}` : ""}
+                {storyAdvice.duration_seconds != null ? ` · ${storyAdvice.duration_seconds}s` : ""}
+                {storyAdvice.analyzed_at ? ` · ${new Date(storyAdvice.analyzed_at).toLocaleString()}` : ""}
+              </p>
               {storyAdvice.logline && (
                 <div>
                   <strong>{t("storyLogline")}</strong>
@@ -1592,7 +1687,11 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           <small className="muted">{t("styleSyncHint")}</small>
         </label>
         <button className="primary" disabled={busy === "script"} type="submit">
-          {busy === "script" ? t("breakingDown") : t("createPanelsFromScript")}
+          {busy === "script"
+            ? t("breakingDown")
+            : scriptForm.use_ai
+              ? t("createPanelsWithAi")
+              : t("splitPanelsLocally")}
         </button>
         <button
           className="secondary"
@@ -1615,7 +1714,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
             <div className="button-row stacked-actions">
               <button
                 className="secondary"
-                disabled={busy === "analyze-bible"}
+                disabled={!cloudAiAvailable || busy === "analyze-bible"}
                 onClick={handleAnalyzeBible}
                 type="button"
               >

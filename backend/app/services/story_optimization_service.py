@@ -1,7 +1,10 @@
+import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from backend.app.config import (
@@ -31,22 +34,17 @@ def optimize_story(payload: StoryOptimizationRequest) -> dict[str, Any]:
     settings = get_active_settings(include_secret=True)
     errors = validate_text_settings(settings)
     offline = is_offline_mode()
-    if payload.use_ai and not offline and not errors:
-        result = _optimize_with_ai(get_text_api_config(settings), payload)
-        if result.get("ok"):
-            return result
-
-    fallback = _local_optimization(payload)
-    if payload.use_ai and offline:
-        fallback["warnings"].append("Cloud AI is unavailable in offline mode; local advice was used.")
-    elif payload.use_ai and errors:
-        fallback["warnings"].append("Text model settings are incomplete; local advice was used.")
-    elif payload.use_ai:
-        fallback["warnings"].append("Text model did not return usable JSON; local advice was used.")
-    return fallback
+    if not payload.use_ai:
+        return _local_optimization(payload)
+    if offline:
+        return _ai_failure("offline_mode", "Cloud AI is unavailable in offline mode.")
+    if errors:
+        return _ai_failure("configuration_error", " ".join(errors))
+    return _optimize_with_ai(get_text_api_config(settings), payload)
 
 
 def _optimize_with_ai(settings: dict[str, Any], payload: StoryOptimizationRequest) -> dict[str, Any]:
+    started = perf_counter()
     platforms = ", ".join(payload.target_platforms) or "Reels, Shorts, Pinterest, Instagram"
     user_prompt = f"""
 Original story:
@@ -61,7 +59,9 @@ Visual style:
 Target platforms:
 {platforms}
 
-Please improve structure for manga panels. Recommend panel count, pacing,
+    Output language: {payload.output_language or "the same main language as the original story"}.
+    Rewrite the story rather than merely returning the original text.
+    Please improve structure for manga panels. Recommend panel count, pacing,
 opening hook, scene beats, image-generation risks, and suitable platforms.
 """
     response = generate_text(
@@ -71,11 +71,46 @@ opening hook, scene beats, image-generation risks, and suitable platforms.
         temperature=0.35,
     )
     if not response.get("ok"):
-        return {"ok": False}
+        return _ai_failure(
+            str(response.get("error") or "text_generation_failed"),
+            str(response.get("exception_message") or "Text model request failed."),
+        )
     parsed = _parse_json_object(response.get("text", ""))
     if not parsed:
-        return {"ok": False}
-    return _normalize_result(parsed, payload, source="ai", warnings=[])
+        return _ai_failure("invalid_model_output", "Text model did not return valid optimization JSON.")
+    improved_script = str(parsed.get("improved_script") or "").strip()
+    if not improved_script:
+        return _ai_failure(
+            "missing_improved_script",
+            "Text model response did not include an optimized script.",
+        )
+    if _normalized_text(improved_script) == _normalized_text(payload.script):
+        return _ai_failure(
+            "unchanged_model_output",
+            "Text model returned the original script without an actual optimization.",
+        )
+    result = _normalize_result(parsed, payload, source="ai", warnings=[])
+    result.update(
+        {
+            "provider": settings.get("provider", ""),
+            "model": settings.get("model", ""),
+            "duration_seconds": round(perf_counter() - started, 2),
+            "analyzed_at": datetime.now(timezone.utc).isoformat(),
+            "input_sha256": hashlib.sha256(payload.script.encode("utf-8")).hexdigest(),
+            "output_language": payload.output_language or "source",
+        }
+    )
+    return result
+
+
+def _ai_failure(error: str, message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": "ai",
+        "error": error,
+        "error_message": message,
+        "warnings": [],
+    }
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -105,6 +140,7 @@ def _normalize_result(
     warnings: list[str],
 ) -> dict[str, Any]:
     panel_count = _safe_int(data.get("recommended_panel_count"), _recommended_panel_count(payload.script))
+    ai_fallback: list[str] = []
     return {
         "ok": True,
         "source": source,
@@ -113,19 +149,23 @@ def _normalize_result(
         "recommended_panel_count": max(1, min(panel_count, 80)),
         "platform_recommendations": _as_list(
             data.get("platform_recommendations"),
-            ["Reels/Shorts for vertical rhythm", "Pinterest for comic-grid saving"],
+            ai_fallback
+            if source == "ai"
+            else ["Reels/Shorts for vertical rhythm", "Pinterest for comic-grid saving"],
         ),
         "storyboard_strategy": _as_list(
             data.get("storyboard_strategy"),
-            _local_strategy(payload.script),
+            ai_fallback if source == "ai" else _local_strategy(payload.script),
         ),
         "revision_suggestions": _as_list(
             data.get("revision_suggestions"),
-            _local_revision_suggestions(payload.script),
+            ai_fallback if source == "ai" else _local_revision_suggestions(payload.script),
         ),
         "risks": _as_list(
             data.get("risks"),
-            ["Keep character and prop references fixed before generating panels."],
+            ai_fallback
+            if source == "ai"
+            else ["Keep character and prop references fixed before generating panels."],
         ),
         "warnings": warnings,
     }
@@ -190,6 +230,10 @@ def _safe_int(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _normalized_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
 
 
 def _as_list(value: Any, fallback: list[str]) -> list[str]:
