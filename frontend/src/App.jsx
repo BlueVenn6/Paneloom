@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api } from "./api";
 import Sidebar from "./components/Sidebar.jsx";
+import ErrorBoundary, { PageErrorFallback } from "./components/ErrorBoundary.jsx";
 import { languageOptions, useI18n } from "./i18n.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import ProjectEditor from "./pages/ProjectEditor.jsx";
@@ -178,26 +179,56 @@ export default function App() {
         {projectError && <div className="alert error">{projectError}</div>}
         {!cloudAiAvailable && <div className="alert">{t("offlineModeMessage")}</div>}
 
-        {activePage === "dashboard" && (
-          <Dashboard
-            currentProject={currentProject}
-            onOpenAssets={openProjectAssets}
-          />
-        )}
-        {activePage === "projects" && (
-          <ProjectEditor
-            projects={projects}
-            currentProjectId={currentProjectId}
-            onSelectProject={setCurrentProjectId}
-            onProjectsChanged={refreshProjects}
-          />
-        )}
-        {activePage === "storyboard" && (
-          <StoryboardPage currentProject={currentProject} cloudAiAvailable={cloudAiAvailable} />
-        )}
-        {activePage === "schedule" && <SchedulePage currentProject={currentProject} />}
-        {activePage === "settings" && <SettingsPage />}
+        <ErrorBoundary
+          resetKey={`${activePage}:${currentProjectId}`}
+          fallback={({ error, reset }) => (
+            <PageErrorFallback
+              error={error}
+              onRetry={reset}
+              onDashboard={() => navigate("dashboard")}
+              t={t}
+            />
+          )}
+        >
+          <PageDiagnosticCrashProbe />
+          {activePage === "dashboard" && (
+            <Dashboard
+              currentProject={currentProject}
+              onOpenAssets={openProjectAssets}
+            />
+          )}
+          {activePage === "projects" && (
+            <ProjectEditor
+              projects={projects}
+              currentProjectId={currentProjectId}
+              onSelectProject={setCurrentProjectId}
+              onProjectsChanged={refreshProjects}
+            />
+          )}
+          {activePage === "storyboard" && (
+            <StoryboardPage currentProject={currentProject} cloudAiAvailable={cloudAiAvailable} />
+          )}
+          {activePage === "schedule" && <SchedulePage currentProject={currentProject} />}
+          {activePage === "settings" && <SettingsPage />}
+        </ErrorBoundary>
       </main>
     </div>
   );
+}
+
+function PageDiagnosticCrashProbe() {
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!window.__PANELOOM_RUNTIME_DIAGNOSTICS__) return undefined;
+    window.__PANELOOM_TRIGGER_PAGE_ERROR__ = () => {
+      setError(new Error("Controlled page render failure for desktop acceptance."));
+    };
+    return () => {
+      delete window.__PANELOOM_TRIGGER_PAGE_ERROR__;
+    };
+  }, []);
+
+  if (error) throw error;
+  return null;
 }

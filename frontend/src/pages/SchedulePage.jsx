@@ -71,6 +71,25 @@ const feedbackFormatOptions = [
   { value: "short video", labelKey: "feedbackFormatShortVideo" },
 ];
 
+const emptySchedule = () => ({ plan: {}, tasks: [], time_logs: [], feedback: [], reviews: {} });
+
+function normalizeReview(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Object.keys(value).length === 0) return null;
+  return { ...value, advice: Array.isArray(value.advice) ? value.advice : [] };
+}
+
+function normalizeSchedule(value) {
+  const data = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    plan: data.plan && typeof data.plan === "object" && !Array.isArray(data.plan) ? data.plan : {},
+    tasks: Array.isArray(data.tasks) ? data.tasks : [],
+    time_logs: Array.isArray(data.time_logs) ? data.time_logs : [],
+    feedback: Array.isArray(data.feedback) ? data.feedback : [],
+    reviews: data.reviews && typeof data.reviews === "object" ? data.reviews : {},
+  };
+}
+
 const taskStatusOptions = [
   { value: "todo", labelKey: "statusTodo" },
   { value: "doing", labelKey: "statusDoing" },
@@ -90,7 +109,7 @@ const flowStateOptions = [
 
 export default function SchedulePage({ currentProject }) {
   const { t } = useI18n();
-  const [schedule, setSchedule] = useState({ plan: {}, tasks: [], time_logs: [], feedback: [], reviews: {} });
+  const [schedule, setSchedule] = useState(emptySchedule);
   const [planForm, setPlanForm] = useState(defaultPlan);
   const [timeLog, setTimeLog] = useState(defaultTimeLog);
   const [feedback, setFeedback] = useState(defaultFeedback);
@@ -101,11 +120,12 @@ export default function SchedulePage({ currentProject }) {
 
   async function refreshSchedule() {
     if (!currentProject) {
-      setSchedule({ plan: {}, tasks: [], time_logs: [], feedback: [], reviews: {} });
+      setSchedule(emptySchedule());
+      setReview(null);
       return;
     }
     const response = await api.getSchedule(currentProject.project_id);
-    const data = response.data || { plan: {}, tasks: [], time_logs: [], feedback: [], reviews: {} };
+    const data = normalizeSchedule(response.data);
     setSchedule(data);
     if (data.plan && Object.keys(data.plan).length > 0) {
       setPlanForm({
@@ -116,7 +136,7 @@ export default function SchedulePage({ currentProject }) {
           : data.plan.platforms || "",
       });
     }
-    setReview(data.reviews?.week || data.reviews?.month || null);
+    setReview(normalizeReview(data.reviews?.week) || normalizeReview(data.reviews?.month));
   }
 
   useEffect(() => {
@@ -754,7 +774,7 @@ export default function SchedulePage({ currentProject }) {
               <p className="muted">{t("bestPlatform")}: {review.best_platform || "-"}</p>
               <p className="muted">{t("bestAspect")}: {review.best_aspect_ratio || "-"}</p>
               <ul className="advice-list">
-                {review.advice.map((item) => (
+                {(Array.isArray(review.advice) ? review.advice : []).map((item) => (
                   <li key={item}>{localizeReviewAdvice(item, t)}</li>
                 ))}
               </ul>

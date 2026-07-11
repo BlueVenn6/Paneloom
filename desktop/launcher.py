@@ -154,21 +154,26 @@ def run_window(port: int = 0) -> None:
         ) from exc
 
     app = create_desktop_app()
-    from backend.app.config import APP_CACHE_DIR
+    from backend.app.config import APP_CACHE_DIR, APP_LOG_DIR
 
     server = LocalDesktopServer(app, port=port)
     server.start()
     _write_runtime_state("ready", server.port)
     try:
+        test_mode = os.getenv("PANELOOM_DESKTOP_TEST", "").strip() == "1"
+        diagnostic_query = "?desktop-test=1" if test_mode else ""
+        frontend_log_path = APP_LOG_DIR / "frontend-runtime.log"
         window = webview.create_window(
             "Paneloom",
-            f"{server.url}/#dashboard",
+            f"{server.url}/{diagnostic_query}#dashboard",
             width=1440,
             height=920,
             min_size=(1024, 700),
         )
         window.events.shown += lambda: _write_runtime_state("window_ready", server.port)
         webview.start(
+            _monitor_frontend_runtime if test_mode else None,
+            (window, frontend_log_path) if test_mode else None,
             gui="edgechromium",
             debug=False,
             private_mode=False,
@@ -189,6 +194,72 @@ def run_window(port: int = 0) -> None:
             active_jobs_interrupted=_HARD_EXIT_REQUIRED,
             forced_server_shutdown=forced_server_shutdown,
         )
+
+
+def _monitor_frontend_runtime(window, log_path: Path) -> None:
+    """Persist sanitized browser errors only while the desktop acceptance mode is enabled."""
+    seen = 0
+    root_missing_recorded = False
+    consecutive_failures = 0
+    while True:
+        try:
+            state = window.evaluate_js(
+                """
+                (() => ({
+                  url: window.location.href,
+                  readyState: document.readyState,
+                  rootMounted: window.__PANELOOM_REACT_ROOT_MOUNTED__ === true,
+                  rootChildren: document.querySelector('#root')?.children.length || 0,
+                  navCount: document.querySelectorAll('.nav-item').length,
+                  entries: window.__PANELOOM_RUNTIME_DIAGNOSTICS__?.snapshot?.() || [],
+                }))()
+                """
+            ) or {}
+            consecutive_failures = 0
+            entries = list(state.get("entries") or [])
+            new_entries = entries[seen:]
+            seen = len(entries)
+            if new_entries:
+                for entry in new_entries:
+                    _append_frontend_diagnostic(log_path, entry)
+            root_missing = (
+                state.get("readyState") == "complete"
+                and state.get("rootMounted") is True
+                and state.get("rootChildren") == 0
+            )
+            if root_missing and not root_missing_recorded:
+                _append_frontend_diagnostic(
+                    log_path,
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "kind": "react.root.empty",
+                        "message": "React root has no rendered children.",
+                        "route": str(state.get("url") or "").split("#", 1)[-1],
+                    },
+                )
+                root_missing_recorded = True
+            elif not root_missing:
+                root_missing_recorded = False
+            time.sleep(0.5)
+        except Exception:
+            consecutive_failures += 1
+            if consecutive_failures >= 20:
+                return
+            time.sleep(0.25)
+
+
+def _append_frontend_diagnostic(log_path: Path, entry: dict) -> None:
+    allowed = {
+        key: entry.get(key)
+        for key in ("timestamp", "kind", "message", "stack", "source", "line", "column", "route")
+        if entry.get(key) not in (None, "")
+    }
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(allowed, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _write_runtime_state(status: str, port: int, **details) -> None:

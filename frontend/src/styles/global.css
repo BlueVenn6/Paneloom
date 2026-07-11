@@ -9,6 +9,33 @@
   text-rendering: optimizeLegibility;
 }
 
+.error-fallback {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  max-width: 760px;
+}
+
+.error-fallback details {
+  margin-top: 14px;
+}
+
+.error-fallback code {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.global-error-fallback {
+  align-items: center;
+  background: var(--bg, #101318);
+  display: flex;
+  min-height: 100vh;
+  padding: 32px;
+  justify-content: center;
+}
+
 * {
   box-sizing: border-box;
 }

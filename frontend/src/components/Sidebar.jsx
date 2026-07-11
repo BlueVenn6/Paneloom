@@ -29,6 +29,7 @@ export default function Sidebar({ activePage, onNavigate }) {
           return (
             <button
               className={`nav-item ${activePage === item.id ? "active" : ""}`}
+              data-page={item.id}
               key={item.id}
               onClick={() => onNavigate(item.id)}
               type="button"

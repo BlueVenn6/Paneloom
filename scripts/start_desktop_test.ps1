@@ -28,9 +28,11 @@ Remove-Item -LiteralPath $runtimeState -Force -ErrorAction SilentlyContinue
 
 $previousStatePath = $env:PANELOOM_RUNTIME_STATE_PATH
 $previousOffline = $env:PANELOOM_FORCE_OFFLINE
+$previousDesktopTest = $env:PANELOOM_DESKTOP_TEST
 try {
   $env:PANELOOM_RUNTIME_STATE_PATH = $runtimeState
   $env:PANELOOM_FORCE_OFFLINE = if ($Offline) { "1" } else { "0" }
+  $env:PANELOOM_DESKTOP_TEST = "1"
   $process = Start-Process `
     -FilePath $pythonw `
     -ArgumentList @("`"$launcher`"") `
@@ -40,6 +42,7 @@ try {
 } finally {
   $env:PANELOOM_RUNTIME_STATE_PATH = $previousStatePath
   $env:PANELOOM_FORCE_OFFLINE = $previousOffline
+  $env:PANELOOM_DESKTOP_TEST = $previousDesktopTest
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds(120)
