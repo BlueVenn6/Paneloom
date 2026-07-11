@@ -19,12 +19,17 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 def _merge_existing_secret(payload: SettingsPayload) -> dict:
     incoming = payload.model_dump()
     current = get_active_settings(include_secret=True)
-    api_key = incoming.get("api_key", "")
-    if not api_key or "****" in api_key:
-        incoming["api_key"] = current.get("api_key", "")
-    text_api_key = incoming.get("text_api_key", "")
-    if not text_api_key or "****" in text_api_key:
-        incoming["text_api_key"] = current.get("text_api_key", "")
+    clear_saved_keys = bool(incoming.pop("clear_saved_keys", False))
+    if clear_saved_keys:
+        incoming["api_key"] = ""
+        incoming["text_api_key"] = ""
+    else:
+        api_key = incoming.get("api_key", "")
+        if not api_key or "****" in api_key:
+            incoming["api_key"] = current.get("api_key", "")
+        text_api_key = incoming.get("text_api_key", "")
+        if not text_api_key or "****" in text_api_key:
+            incoming["text_api_key"] = current.get("text_api_key", "")
     if incoming.get("provider_type") == "official":
         incoming["base_url"] = OFFICIAL_BASE_URL
     return incoming

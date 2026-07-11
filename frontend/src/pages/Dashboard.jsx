@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, API_BASE } from "../api";
+import { api } from "../api";
 import { useI18n } from "../i18n.jsx";
 
 export default function Dashboard({ currentProject, onOpenAssets }) {
@@ -30,10 +30,9 @@ export default function Dashboard({ currentProject, onOpenAssets }) {
       </div>
 
       <div className="panel">
-        <h3>{t("apiEndpoint")}</h3>
+        <h3>{t("backendOnline")}</h3>
         <div className={`status-pill ${health.status}`}>{statusLabel(health.status, t)}</div>
         <p className="muted">{health.messageKey ? t(health.messageKey) : health.message}</p>
-        <code>{API_BASE}</code>
       </div>
 
       <div className="panel">

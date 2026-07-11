@@ -303,3 +303,4 @@ class SettingsPayload(BaseModel):
     image_size: str = "1024x1024"
     image_quality: Literal["low", "medium", "high"] = "low"
     image_result_mode: Literal["auto", "prefer_b64_json", "url_only"] = "auto"
+    clear_saved_keys: bool = False

@@ -39,6 +39,7 @@ from backend.app.services.schedule_service import (
 )
 from backend.app.services.shotlist_service import (
     add_shot,
+    apply_bible_to_shot_prompt,
     list_shots,
     select_shot_version,
     update_shot,
@@ -233,7 +234,7 @@ class IsolatedProjectTestCase(unittest.TestCase):
 
     def test_exports_are_real_and_parseable(self):
         project = self.create_project("Exports")
-        add_shot(
+        shot = add_shot(
             project["project_id"],
             ShotCreate(
                 scene_id="P001",
@@ -242,6 +243,20 @@ class IsolatedProjectTestCase(unittest.TestCase):
                 prompt="A cinematic panel of a door opening",
                 revision_notes="Narration line",
             ),
+        )
+        generated = project_service.get_project_generated_dir(project["project_id"]) / "panel.png"
+        Image.new("RGB", (16, 16), color=(20, 30, 40)).save(generated)
+        relative = project_service.to_project_relative_path(project["project_id"], generated)
+        update_shot(
+            project["project_id"],
+            shot["shot_id"],
+            {
+                "status": "done",
+                "output_path": relative,
+                "output_url": project_service.project_file_url(
+                    project["project_id"], "generated", generated.name
+                ),
+            },
         )
         paths = {}
         for export_format in ["json", "csv", "xlsx", "srt", "html"]:
@@ -255,7 +270,9 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertEqual(workbook.active["B2"].value, "P001")
         workbook.close()
         self.assertIn("00:00:02,500", paths["srt"].read_text(encoding="utf-8"))
-        self.assertIn("A door opens", paths["html"].read_text(encoding="utf-8"))
+        html = paths["html"].read_text(encoding="utf-8")
+        self.assertIn("A door opens", html)
+        self.assertIn('src="../generated/panel.png"', html)
         self.assertEqual(
             json.loads(paths["json"].read_text(encoding="utf-8"))["shots"][0]["scene_id"],
             "P001",
@@ -372,6 +389,88 @@ class IsolatedProjectTestCase(unittest.TestCase):
             project_service.resolve_project_path(project["project_id"], stored["output_path"]).is_file()
         )
         self.assertEqual(stored["versions"][-1]["status"], "partial")
+
+    def test_bible_and_selected_reference_are_used_by_generation(self):
+        project = self.create_project("Continuity Generation")
+        project_service.save_project_bible(
+            project["project_id"],
+            {
+                "characters": "Hero wears a red coat",
+                "locations": "Rainy station platform",
+                "props": "red umbrella",
+                "visual_style": "clean manga line art",
+                "prompt_prefix": "continuity fixture",
+            },
+        )
+        shot = add_shot(
+            project["project_id"],
+            ShotCreate(prompt="Hero waits for the train"),
+        )
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32), color=(120, 30, 40)).save(buffer, format="PNG")
+        reference = image_service.save_reference_image(
+            project["project_id"],
+            "hero-reference.png",
+            buffer.getvalue(),
+        )
+        bible_prompt, _ = apply_bible_to_shot_prompt(
+            shot,
+            project_service.get_project_bible(project["project_id"]),
+        )
+        self.assertIn("Hero wears a red coat", bible_prompt)
+        self.assertIn("Rainy station platform", bible_prompt)
+        self.assertIn("red umbrella", bible_prompt)
+        self.assertIn("clean manga line art", bible_prompt)
+
+        observed = {}
+
+        def fake_edit(config, prompt, image_path, size, quality, output_path):
+            observed["prompt"] = prompt
+            observed["image_paths"] = [Path(item) for item in image_path]
+            Image.new("RGB", (64, 64), color=(40, 60, 90)).save(output_path)
+            return {
+                "ok": True,
+                "status": "done",
+                "output_path": str(output_path),
+                "output_url": "",
+                "download_status": "saved_b64_json",
+                "download_error": "",
+                "endpoint": "https://example.invalid/images/edits",
+                "model": "controlled-image",
+                "size": size,
+                "quality": quality,
+                "status_code": 200,
+            }
+
+        settings = {
+            "provider_type": "custom",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "controlled-test-key",
+            "image_model": "controlled-image",
+            "image_size": "64x64",
+            "image_quality": "low",
+            "image_result_mode": "auto",
+        }
+        with (
+            patch.object(image_service, "get_active_settings", return_value=settings),
+            patch.object(image_service, "edit_image", side_effect=fake_edit) as edit_call,
+        ):
+            result = image_service.generate_shot_image(
+                project["project_id"],
+                shot["shot_id"],
+                ImageGenerationRequest(
+                    size="64x64",
+                    quality="low",
+                    reference_filenames=[reference["filename"]],
+                ),
+            )
+
+        self.assertEqual(result["status"], "done")
+        edit_call.assert_called_once()
+        self.assertTrue(observed["image_paths"])
+        self.assertTrue(all(path.is_file() for path in observed["image_paths"]))
+        self.assertIn("Hero wears a red coat", observed["prompt"])
+        self.assertIn("Rainy station platform", observed["prompt"])
 
 
 class ImageClientBoundaryTests(unittest.TestCase):
@@ -518,6 +617,39 @@ class SettingsSecurityTests(unittest.TestCase):
         ):
             response = settings_routes.test_settings(payload)
         self.assertFalse(response.ok)
+
+    def test_saved_keys_can_be_explicitly_cleared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            with patch.object(config, "SETTINGS_PATH", settings_path):
+                config.save_settings(
+                    {
+                        "provider_type": "custom",
+                        "base_url": "https://example.invalid/v1",
+                        "api_key": "image-secret",
+                        "text_provider": "gpt",
+                        "text_provider_mode": "relay",
+                        "text_base_url": "https://example.invalid/v1",
+                        "text_api_key": "text-secret",
+                    }
+                )
+                response = settings_routes.post_settings(
+                    SettingsPayload(
+                        provider_type="custom",
+                        base_url="https://example.invalid/v1",
+                        text_provider="gpt",
+                        text_provider_mode="relay",
+                        text_base_url="https://example.invalid/v1",
+                        clear_saved_keys=True,
+                    )
+                )
+                stored = settings_path.read_text(encoding="utf-8")
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.data["api_key"], "")
+        self.assertEqual(response.data["text_api_key"], "")
+        self.assertNotIn("api_key_encrypted", stored)
+        self.assertNotIn("text_api_key_encrypted", stored)
 
 
 if __name__ == "__main__":

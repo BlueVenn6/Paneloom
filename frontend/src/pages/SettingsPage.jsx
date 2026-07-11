@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 
 import { api } from "../api";
 import { useI18n } from "../i18n.jsx";
@@ -113,6 +114,23 @@ export default function SettingsPage() {
         throw new Error(errors.join(" · ") || response.message || t("connectionTestFailed"));
       }
       setMessage(t("connectionTested"));
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function clearSavedKeys() {
+    if (!window.confirm(t("clearSavedKeysConfirm"))) return;
+    setBusy("clear-keys");
+    setMessage("");
+    try {
+      await api.saveSettings({ ...effectiveForm, clear_saved_keys: true });
+      setMaskedKey("");
+      setMaskedTextKey("");
+      setForm({ ...effectiveForm, api_key: "", text_api_key: "" });
+      setMessage(t("savedKeysCleared"));
     } catch (error) {
       setMessage(error.message);
     } finally {
@@ -275,6 +293,15 @@ export default function SettingsPage() {
           </button>
           <button className="secondary" disabled={busy === "test"} onClick={test} type="button">
             {busy === "test" ? t("testing") : t("testConnection")}
+          </button>
+          <button
+            className="secondary danger"
+            disabled={busy === "clear-keys" || (!maskedKey && !maskedTextKey)}
+            onClick={clearSavedKeys}
+            type="button"
+          >
+            <Trash2 aria-hidden="true" size={16} />
+            {t("clearSavedKeys")}
           </button>
         </div>
         {message && <p className="form-message">{message}</p>}

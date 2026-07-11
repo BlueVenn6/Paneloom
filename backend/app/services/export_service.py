@@ -2,7 +2,7 @@ import csv
 import json
 import zipfile
 from html import escape
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from backend.app.services.project_service import (
     get_project,
@@ -155,10 +155,10 @@ def _safe_spreadsheet_text(value: object) -> str:
 def _export_html(path: Path, project: dict, bible: dict, shots: list[dict]) -> None:
     panels = []
     for shot in shots:
-        image = shot.get("output_url", "")
+        image_source = _html_image_source(shot)
         image_html = (
-            f'<img src="../..{escape(image)}" alt="{escape(shot.get("shot_id", ""))}">'
-            if image.startswith("/assets/")
+            f'<img src="{escape(image_source)}" alt="{escape(shot.get("shot_id", ""))}">'
+            if image_source
             else '<div class="placeholder">无图片 / 無圖片 / No image / 画像なし / 이미지 없음</div>'
         )
         panels.append(
@@ -203,6 +203,23 @@ def _export_html(path: Path, project: dict, bible: dict, shots: list[dict]) -> N
 </html>
 """
     path.write_text(html, encoding="utf-8")
+
+
+def _html_image_source(shot: dict) -> str:
+    output_path = str(shot.get("output_path") or "").replace("\\", "/")
+    portable = PurePosixPath(output_path)
+    if (
+        output_path
+        and not portable.is_absolute()
+        and ".." not in portable.parts
+        and portable.parts
+        and portable.parts[0] == "generated"
+    ):
+        return f"../{portable.as_posix()}"
+    output_url = str(shot.get("output_url") or "")
+    if output_url.startswith("/assets/"):
+        return f"../..{output_url}"
+    return ""
 
 
 def _export_srt(path: Path, shots: list[dict]) -> None:
