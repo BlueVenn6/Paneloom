@@ -212,6 +212,9 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getSettings: () => request("/settings"),
+  getUiPreferences: () => request("/settings/ui-preferences"),
+  saveUiPreferences: (payload) =>
+    request("/settings/ui-preferences", { method: "POST", body: JSON.stringify(payload) }),
   saveSettings: (payload) =>
     request("/settings", { method: "POST", body: JSON.stringify(payload) }),
   testSettings: (payload) =>

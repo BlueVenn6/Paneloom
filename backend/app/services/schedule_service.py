@@ -21,6 +21,7 @@ from backend.app.services.project_service import (
     get_project_reference_dir,
     get_project_workspace,
     require_project,
+    resolve_project_path,
     utc_now,
 )
 from backend.app.services.shotlist_service import list_shots
@@ -92,6 +93,7 @@ def get_schedule(project_id: str) -> dict:
             "month": _read_json(_review_path(project_id, "month"), {}),
         },
         "project_progress": _project_progress(project_id),
+        "shot_progress": _shot_progress(project_id),
     }
 
 
@@ -131,11 +133,7 @@ def _project_progress(project_id: str) -> list[dict]:
     reference_count = len(
         [path for path in get_project_reference_dir(project_id).glob("*") if path.is_file()]
     )
-    generated_count = sum(
-        1
-        for shot in shots
-        if shot.get("output_path") or shot.get("output_url") or shot.get("selected_version_id")
-    )
+    generated_count = sum(1 for shot in shots if _shot_has_saved_image(project_id, shot))
     locked_count = sum(1 for shot in shots if shot.get("locked"))
     failed_count = sum(1 for shot in shots if shot.get("status") == "failed")
     export_dir = get_project_dir(project_id) / "exports"
@@ -194,6 +192,58 @@ def _project_progress(project_id: str) -> list[dict]:
         ),
         stage("export", "done" if export_count else "todo", int(export_count > 0), 1, f"exports:{export_count}"),
     ]
+
+
+def _shot_has_saved_image(project_id: str, shot: dict) -> bool:
+    candidate_paths: list[str] = []
+    if shot.get("output_path"):
+        candidate_paths.append(str(shot["output_path"]))
+    for collection_name in ("outputs", "versions"):
+        collection = shot.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if isinstance(item, dict) and item.get("output_path"):
+                candidate_paths.append(str(item["output_path"]))
+    for candidate in dict.fromkeys(candidate_paths):
+        try:
+            if resolve_project_path(project_id, candidate).is_file():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _shot_progress(project_id: str) -> list[dict]:
+    rows = []
+    for index, shot in enumerate(list_shots(project_id), 1):
+        has_saved_image = _shot_has_saved_image(project_id, shot)
+        locked = bool(shot.get("locked"))
+        generation_status = str(shot.get("status") or "pending")
+        if locked and has_saved_image:
+            status = "locked"
+        elif has_saved_image:
+            status = "done"
+        elif generation_status == "failed":
+            status = "failed"
+        elif generation_status in {"generating", "queued"}:
+            status = "doing"
+        else:
+            status = "todo"
+        rows.append(
+            {
+                "shot_id": str(shot.get("shot_id") or f"shot-{index}"),
+                "scene_id": str(shot.get("scene_id") or f"#{index}"),
+                "index": index,
+                "status": status,
+                "has_saved_image": has_saved_image,
+                "locked": locked,
+                "approval_status": str(shot.get("approval_status") or "draft"),
+                "generation_status": generation_status,
+                "source": "project_filesystem",
+            }
+        )
+    return rows
 
 
 def generate_schedule(project_id: str, payload: SchedulePlanRequest) -> dict:

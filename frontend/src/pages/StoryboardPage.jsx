@@ -271,6 +271,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   const [selectedAspects, setSelectedAspects] = useState(["vertical_9_16"]);
   const [visualFormat, setVisualFormat] = useState("webtoon_strip");
   const [panelGutterStyle, setPanelGutterStyle] = useState("framed");
+  const [generationQuality, setGenerationQuality] = useState("medium");
   const [gridAspect, setGridAspect] = useState("vertical_9_16");
   const [gridColumns, setGridColumns] = useState(2);
   const [previewImage, setPreviewImage] = useState(null);
@@ -326,6 +327,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
   function responseErrorMessage(response, fallback = "") {
     if (!response) return fallback || t("unknownError");
     const data = response.data || {};
+    if (data.error_code === "image_test_running") return t("generationBlockedByImageTest");
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean).join(" · ") : "";
     return (
       errors ||
@@ -337,6 +339,20 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       fallback ||
       t("unknownError")
     );
+  }
+
+  function localizedGenerationError(message) {
+    const text = String(message || "");
+    if (text.includes("Generation was interrupted when the backend stopped")) {
+      return t("generationInterruptedRetry");
+    }
+    if (
+      text.includes("Image provider exceeded the total response deadline") ||
+      text.includes("request_timeout")
+    ) {
+      return t("generationProviderTimedOut");
+    }
+    return text;
   }
 
   function workspacePayload(overrides = {}) {
@@ -351,6 +367,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       use_ai: scriptForm.use_ai,
       visual_format: visualFormat,
       panel_gutter_style: panelGutterStyle,
+      generation_quality: generationQuality,
       selected_aspects: selectedAspects,
       selected_reference_filenames: selectedReferences,
       ...overrides,
@@ -377,12 +394,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       workspaceLoadedProjectIdRef.current = "";
       return;
     }
-    const [shotResponse, bibleResponse, referenceResponse, aspectResponse, workspaceResponse] = await Promise.all([
+    const [shotResponse, bibleResponse, referenceResponse, aspectResponse, workspaceResponse, settingsResponse] = await Promise.all([
       api.listShots(currentProject.project_id),
       api.getProjectBible(currentProject.project_id),
       api.listReferences(currentProject.project_id),
       api.getAspectPresets(currentProject.project_id),
       api.getProjectWorkspace(currentProject.project_id),
+      api.getSettings(),
     ]);
     const nextShots = shotResponse.data || [];
     setShots(nextShots);
@@ -403,7 +421,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           if (shot.status === "done" && shot.output_url) {
             next[shot.shot_id] = "";
           } else if (shot.status === "failed" && shot.generation_error) {
-            next[shot.shot_id] = shot.generation_error;
+            next[shot.shot_id] = localizedGenerationError(shot.generation_error);
           }
         });
         return next;
@@ -421,7 +439,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           } else if (shot.status === "failed") {
             next[shot.shot_id] = {
               stageKey: "generationProgressFailed",
-              detail: shot.generation_error || t("unknownError"),
+              detail: localizedGenerationError(shot.generation_error) || t("unknownError"),
               updatedAt: new Date().toLocaleTimeString(),
             };
           }
@@ -475,6 +493,9 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       );
       setVisualFormat(workspace.visual_format || "webtoon_strip");
       setPanelGutterStyle(workspace.panel_gutter_style || "framed");
+      setGenerationQuality(
+        workspace.generation_quality || settingsResponse.data?.image_quality || "medium",
+      );
       const savedAspects = Array.isArray(workspace.selected_aspects)
         ? workspace.selected_aspects.filter((aspectId) =>
             nextAspects.some((aspect) => aspect.id === aspectId),
@@ -535,6 +556,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     scriptVersions,
     visualFormat,
     panelGutterStyle,
+    generationQuality,
     selectedAspects,
     selectedReferences,
   ]);
@@ -996,6 +1018,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         reference_filenames: selectedReferences,
         visual_format: visualFormat,
         panel_gutter_style: panelGutterStyle,
+        quality: generationQuality,
       });
       if (!startResponse.ok) {
         const errorMessage = responseErrorMessage(startResponse);
@@ -1013,7 +1036,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       let pollAttempts = 0;
       while (jobId) {
         pollAttempts += 1;
-        if (pollAttempts > 200) throw new Error(t("generationPollingTimedOut"));
+        if (pollAttempts > 320) throw new Error(t("generationPollingTimedOut"));
         await sleep(3000);
         response = await api.getGenerationJob(currentProject.project_id, jobId);
         const job = response.data || {};
@@ -1022,7 +1045,12 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           setShotProgressStage(shotId, "generationProgressQueued", `${jobId} · ${job.duration_seconds || 0}s`);
         } else if (job.status === "running") {
           mergeShotUpdate(shotId, { status: "generating", generation_error: "" });
-          setShotProgressStage(shotId, "generationProgressSubmitting", `${jobId} · ${job.duration_seconds || 0}s`);
+          const duration = Number(job.duration_seconds || 0);
+          setShotProgressStage(
+            shotId,
+            "generationProgressSubmitting",
+            `${jobId} · ${duration}s${duration >= 180 ? ` · ${t("generationProviderSlow")}` : ""}`,
+          );
         } else if (job.status === "done" || job.status === "failed") {
           response = {
             ok: job.status === "done",
@@ -1040,12 +1068,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       setShotProgressStage(shotId, "generationProgressVerifying");
       await refreshAll();
       if (!response.ok) {
-        const shortError =
+        const shortError = localizedGenerationError(
           response.data?.error_message ||
           response.data?.error ||
           response.data?.short_error ||
           response.data?.error_code ||
-          response.message;
+          response.message,
+        );
         setShotErrors((current) => ({ ...current, [shotId]: shortError }));
         mergeShotUpdate(shotId, { status: "failed", generation_error: shortError });
         setShotProgressStage(shotId, "generationProgressFailed", shortError);
@@ -2197,6 +2226,18 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 </span>
               </div>
             </div>
+            <label className="generation-quality-control">
+              <span>{t("generationQuality")}</span>
+              <select
+                value={generationQuality}
+                onChange={(event) => setGenerationQuality(event.target.value)}
+              >
+                <option value="low">{t("qualityLow")}</option>
+                <option value="medium">{t("qualityMedium")}</option>
+                <option value="high">{t("qualityHigh")}</option>
+              </select>
+              <small>{t("generationQualityHint")}</small>
+            </label>
             <div className="format-switch" role="group" aria-label={t("visualFormat")}>
               <button
                 className={visualFormat === "webtoon_strip" ? "selected" : ""}
@@ -2371,7 +2412,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                         </label>
                         {shot.download_error && <div className="row-error">{shot.download_error}</div>}
                         {shot.generation_error && (
-                          <div className="row-error">{shot.generation_error}</div>
+                          <div className="row-error">{localizedGenerationError(shot.generation_error)}</div>
                         )}
                         {shotErrors[shot.shot_id] && (
                           <div className="row-error">{shotErrors[shot.shot_id]}</div>
@@ -2721,13 +2762,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                   value={gridColumns}
                   onChange={(event) => setGridColumns(event.target.value)}
                 />
-                <small className="muted">
-                  {t("gridExportSummary")} {generatedShots.length} · {t("gridRows")} {Math.ceil(generatedShots.length / Math.max(1, Number(gridColumns) || 1))}
-                </small>
               </label>
               <button className="primary" onClick={exportComicGridPng} type="button">
                 {t("exportGridPng")}
               </button>
+              <small className="muted grid-export-summary">
+                {t("gridExportSummary")} {generatedShots.length} · {t("gridRows")} {Math.ceil(generatedShots.length / Math.max(1, Number(gridColumns) || 1))}
+              </small>
             </div>
           </div>
         </div>

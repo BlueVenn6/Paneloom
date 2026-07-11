@@ -31,6 +31,7 @@ export default function App() {
   );
   const [projectError, setProjectError] = useState("");
   const [cloudAiAvailable, setCloudAiAvailable] = useState(() => navigator.onLine);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const lastInteractionRef = useRef(Date.now());
 
   function userFacingError(error) {
@@ -64,7 +65,39 @@ export default function App() {
   }
 
   useEffect(() => {
-    refreshProjects();
+    let active = true;
+    async function bootstrapDesktopState() {
+      let preferredProjectId = currentProjectId;
+      try {
+        const preferenceResponse = await api.getUiPreferences();
+        const preferences = preferenceResponse.data || {};
+        preferredProjectId = preferences.current_project_id || preferredProjectId;
+        if (preferences.language_selection) setLanguageSelection(preferences.language_selection);
+      } catch {
+        // Local storage remains a development-mode fallback.
+      }
+      try {
+        const response = await api.listProjects();
+        if (!active) return;
+        const list = response.data || [];
+        setProjects(list);
+        setProjectError("");
+        const preferredExists = list.some(
+          (project) => project.project_id === preferredProjectId,
+        );
+        setCurrentProjectId(
+          preferredExists ? preferredProjectId : list[0]?.project_id || "",
+        );
+      } catch (error) {
+        if (active) setProjectError(userFacingError(error));
+      } finally {
+        if (active) setPreferencesLoaded(true);
+      }
+    }
+    bootstrapDesktopState();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -108,6 +141,14 @@ export default function App() {
       localStorage.removeItem(LEGACY_PROJECT_STORAGE_KEY);
     }
   }, [currentProjectId]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) return;
+    api.saveUiPreferences({
+      current_project_id: currentProjectId,
+      language_selection: languageSelection,
+    }).catch(() => {});
+  }, [currentProjectId, languageSelection, preferencesLoaded]);
 
   const currentProject = useMemo(
     () => projects.find((project) => project.project_id === currentProjectId) || null,

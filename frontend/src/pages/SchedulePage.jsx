@@ -79,6 +79,7 @@ const emptySchedule = () => ({
   feedback: [],
   reviews: {},
   project_progress: [],
+  shot_progress: [],
 });
 
 function normalizeReview(value) {
@@ -99,6 +100,7 @@ function normalizeSchedule(value) {
     feedback: Array.isArray(data.feedback) ? data.feedback : [],
     reviews: data.reviews && typeof data.reviews === "object" ? data.reviews : {},
     project_progress: Array.isArray(data.project_progress) ? data.project_progress : [],
+    shot_progress: Array.isArray(data.shot_progress) ? data.shot_progress : [],
   };
 }
 
@@ -129,6 +131,7 @@ export default function SchedulePage({ currentProject }) {
   const [review, setReview] = useState(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
+  const [showAllShots, setShowAllShots] = useState(false);
 
   async function refreshSchedule() {
     if (!currentProject) {
@@ -179,6 +182,10 @@ export default function SchedulePage({ currentProject }) {
         .slice(0, 12),
     [schedule.tasks],
   );
+
+  const visibleShotProgress = showAllShots
+    ? schedule.shot_progress
+    : schedule.shot_progress.slice(0, 12);
 
   const stats = useMemo(() => {
     const progress = schedule.project_progress;
@@ -373,6 +380,48 @@ export default function SchedulePage({ currentProject }) {
           ))}
         </div>
       </section>
+      <section className="panel actual-shot-progress">
+        <div className="archive-section-header">
+          <div className="section-heading">
+            <p className="eyebrow">{t("automaticShotProgress")}</p>
+            <h3>{t("actualShotProgress")}</h3>
+          </div>
+          <span className="muted">
+            {schedule.shot_progress.filter((item) => item.has_saved_image).length}/
+            {schedule.shot_progress.length} {t("shotsWithSavedImages")}
+          </span>
+        </div>
+        <p className="muted">{t("actualShotProgressHint")}</p>
+        {schedule.shot_progress.length === 0 ? (
+          <div className="empty-state align-left">{t("noStoryboardShots")}</div>
+        ) : (
+          <div className="shot-progress-list">
+            {visibleShotProgress.map((shot) => (
+              <article className={`shot-progress-row ${shot.status}`} key={shot.shot_id}>
+                <div>
+                  <strong>#{shot.index} · {shot.scene_id}</strong>
+                  <small>{shot.shot_id}</small>
+                </div>
+                <span className={`status-pill ${shot.has_saved_image ? "done" : shot.status}`}>
+                  {shot.has_saved_image ? t("savedImageReady") : t(`status${shot.status[0].toUpperCase()}${shot.status.slice(1)}`)}
+                </span>
+                <span className={`status-pill ${shot.locked ? "done" : "todo"}`}>
+                  {shot.locked ? t("shotLocked") : t("shotNotLocked")}
+                </span>
+              </article>
+            ))}
+          </div>
+        )}
+        {schedule.shot_progress.length > 12 && (
+          <button
+            className="secondary compact-button"
+            onClick={() => setShowAllShots((current) => !current)}
+            type="button"
+          >
+            {showAllShots ? t("showFewerShots") : t("showAllShots")}
+          </button>
+        )}
+      </section>
       <section className="schedule-stats">
         <div className="panel stat-card">
           <span>{t("completion")}</span>
@@ -396,7 +445,10 @@ export default function SchedulePage({ currentProject }) {
         </div>
       </section>
 
-      <section className="content-grid two-col">
+      <details className="optional-planning-section">
+        <summary>{t("optionalPublishingPlanTitle")}</summary>
+        <p className="muted">{t("optionalPublishingPlanHint")}</p>
+      <section className="content-grid balanced-two-col">
         <form className="panel form-panel" onSubmit={handleGeneratePlan}>
           <div className="section-heading">
             <p className="eyebrow">{t("optionalManualPlan")}</p>
@@ -519,9 +571,16 @@ export default function SchedulePage({ currentProject }) {
             <h3>{dueTasks.length} {t("openTasksDue")}</h3>
           </div>
           <TaskList tasks={dueTasks} onUpdate={updateTask} t={t} />
+          <div className="section-divider" />
+          <div className="section-heading">
+            <p className="eyebrow">{t("upcoming")}</p>
+            <h3>{t("nextProductionTasks")}</h3>
+          </div>
+          <TaskList tasks={upcomingTasks} onUpdate={updateTask} t={t} />
           {message && <p className="form-message">{message}</p>}
         </div>
       </section>
+      </details>
 
       <section className="content-grid two-col">
         <form className="panel form-panel" onSubmit={handleTimeLog}>
@@ -786,16 +845,7 @@ export default function SchedulePage({ currentProject }) {
         </form>
       </section>
 
-      <section className="content-grid two-col">
-        <div className="panel">
-          <div className="section-heading">
-            <p className="eyebrow">{t("upcoming")}</p>
-            <h3>{t("nextProductionTasks")}</h3>
-          </div>
-          <TaskList tasks={upcomingTasks} onUpdate={updateTask} t={t} />
-        </div>
-
-        <div className="panel">
+      <section className="panel">
           <div className="section-heading">
             <p className="eyebrow">{t("review")}</p>
             <h3>{t("weeklyMonthlyRecap")}</h3>
@@ -834,7 +884,6 @@ export default function SchedulePage({ currentProject }) {
               </ul>
             </div>
           )}
-        </div>
       </section>
     </section>
   );

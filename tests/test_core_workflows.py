@@ -32,6 +32,7 @@ from backend.app.models.schemas import (
     StoryOptimizationRequest,
 )
 from backend.app.routes import projects as project_routes
+from backend.app.routes import generation as generation_routes
 from backend.app.routes import settings as settings_routes
 from backend.app.services import (
     export_service,
@@ -260,6 +261,36 @@ class IsolatedProjectTestCase(unittest.TestCase):
         )
         self.assertEqual(review["automatic_active_minutes"], 1)
         self.assertEqual(review["progress_source"], "project_state")
+
+    def test_schedule_shot_progress_requires_a_real_saved_image_file(self):
+        project = self.create_project("Real shot progress")
+        project_id = project["project_id"]
+        shot = add_shot(project_id, ShotCreate(scene_id="SCENE-001", prompt="A real panel"))
+
+        missing_path = "generated/missing.png"
+        update_shot(
+            project_id,
+            shot["shot_id"],
+            {"output_path": missing_path, "status": "done"},
+        )
+        missing = get_schedule(project_id)
+        self.assertEqual(missing["project_progress"][3]["completed"], 0)
+        self.assertFalse(missing["shot_progress"][0]["has_saved_image"])
+        self.assertEqual(missing["shot_progress"][0]["status"], "todo")
+
+        image_path = project_service.get_project_dir(project_id) / missing_path
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"real-image-file")
+        update_shot(
+            project_id,
+            shot["shot_id"],
+            {"locked": True, "approval_status": "approved"},
+        )
+        saved = get_schedule(project_id)
+        self.assertEqual(saved["project_progress"][3]["completed"], 1)
+        self.assertTrue(saved["shot_progress"][0]["has_saved_image"])
+        self.assertTrue(saved["shot_progress"][0]["locked"])
+        self.assertEqual(saved["shot_progress"][0]["status"], "locked")
 
     def test_native_desktop_save_writes_the_selected_file_atomically(self):
         project = self.create_project("Desktop Save")
@@ -709,6 +740,30 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertIn("Hero wears a red coat", observed["prompt"])
         self.assertIn("Rainy station platform", observed["prompt"])
 
+    def test_duplicate_shot_generation_reuses_the_active_job(self):
+        project = self.create_project("Duplicate generation")
+        shot = add_shot(
+            project["project_id"],
+            ShotCreate(scene_id="P001", prompt="One request only"),
+        )
+        generation_routes._GENERATION_JOBS.clear()
+        try:
+            with patch.object(generation_routes._GENERATION_EXECUTOR, "submit") as submit:
+                first = generation_routes.start_generation_job(
+                    project["project_id"],
+                    shot["shot_id"],
+                    ImageGenerationRequest(),
+                )
+                second = generation_routes.start_generation_job(
+                    project["project_id"],
+                    shot["shot_id"],
+                    ImageGenerationRequest(),
+                )
+            self.assertEqual(first.data["job_id"], second.data["job_id"])
+            submit.assert_called_once()
+        finally:
+            generation_routes._GENERATION_JOBS.clear()
+
 
 class StoryOptimizationTests(unittest.TestCase):
     def _run_with_response(self, response_text: str) -> dict:
@@ -797,11 +852,28 @@ class ImageClientBoundaryTests(unittest.TestCase):
             self.assertEqual(request.kwargs["json"]["quality"], "low")
             self.assertEqual(request.kwargs["json"]["response_format"], "b64_json")
             self.assertEqual(request.kwargs["timeout"], (30, openai_image_client.IMAGE_REQUEST_TIMEOUT_SECONDS))
+            self.assertTrue(request.kwargs["stream"])
             self.assertTrue(result["ok"])
             self.assertTrue(output.is_file())
             with Image.open(output) as persisted:
                 self.assertEqual(persisted.size, (8, 8))
             self.assertEqual(list(output.parent.glob(".*.tmp")), [])
+
+    def test_streaming_keepalive_cannot_extend_the_total_deadline(self):
+        class StreamingResponse:
+            closed = False
+
+            def iter_content(self, chunk_size):
+                yield b"keepalive"
+
+            def close(self):
+                self.closed = True
+
+        response = StreamingResponse()
+        with patch.object(openai_image_client, "monotonic", return_value=10):
+            with self.assertRaises(requests.ReadTimeout):
+                openai_image_client._consume_response_before_deadline(response, deadline=9)
+        self.assertTrue(response.closed)
 
     def test_timeout_is_classified_without_a_false_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -963,12 +1035,66 @@ class SettingsSecurityTests(unittest.TestCase):
         with (
             patch.object(settings_routes, "_settings_for_test", return_value=(payload.model_dump(), "request")),
             patch.object(settings_routes, "validate_api_settings", return_value=[]),
+            patch.object(generation_routes, "active_image_job_count", return_value=0),
             patch.object(settings_routes, "_test_image_generation", return_value={"ok": False, "status": "timeout", "errors": ["timeout"]}),
         ):
             image_response = settings_routes.test_image_settings(payload)
         self.assertTrue(text_response.ok)
         self.assertFalse(image_response.ok)
         self.assertEqual(image_response.data["status"], "timeout")
+
+    def test_paid_image_probe_is_not_started_during_a_workspace_generation(self):
+        payload = SettingsPayload(
+            provider_type="custom",
+            base_url="https://example.invalid/v1",
+            api_key="image-key",
+        )
+        with (
+            patch.object(settings_routes, "_settings_for_test", return_value=(payload.model_dump(), "request")),
+            patch.object(settings_routes, "validate_api_settings", return_value=[]),
+            patch.object(generation_routes, "active_image_job_count", return_value=1),
+            patch.object(settings_routes, "_test_image_generation") as image_test,
+        ):
+            response = settings_routes.test_image_settings(payload)
+        self.assertFalse(response.ok)
+        self.assertEqual(response.data["status"], "busy")
+        self.assertEqual(response.data["reason"], "active_generation")
+        image_test.assert_not_called()
+
+    def test_image_probe_has_a_server_side_timeout_before_the_ui_timeout(self):
+        def fake_generate(_settings, *, output_path, **kwargs):
+            Path(output_path).write_bytes(b"test-image")
+            return {"ok": True, "status": "done", "status_code": 200}
+
+        with patch.object(settings_routes, "generate_image", side_effect=fake_generate) as generate:
+            result = settings_routes._test_image_generation({"image_model": "test-image"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            generate.call_args.kwargs["request_timeout_seconds"],
+            settings_routes.IMAGE_TEST_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            generate.call_args.kwargs["total_timeout_seconds"],
+            settings_routes.IMAGE_TEST_TIMEOUT_SECONDS,
+        )
+
+    def test_ui_preferences_are_stored_separately_without_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ui-preferences.json"
+            with patch.object(settings_routes, "UI_PREFERENCES_PATH", path):
+                saved = settings_routes.save_ui_preferences(
+                    settings_routes.UiPreferencesPayload(
+                        current_project_id="project-local",
+                        language_selection="zh-CN",
+                    )
+                )
+                loaded = settings_routes.get_ui_preferences()
+                raw = path.read_text(encoding="utf-8")
+        self.assertTrue(saved.ok)
+        self.assertEqual(loaded.data["current_project_id"], "project-local")
+        self.assertEqual(loaded.data["language_selection"], "zh-CN")
+        self.assertNotIn("api_key", raw)
+        self.assertNotIn("secret", raw.lower())
 
     def test_saved_keys_can_be_explicitly_cleared(self):
         with tempfile.TemporaryDirectory() as directory:

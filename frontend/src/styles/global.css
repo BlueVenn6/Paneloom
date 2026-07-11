@@ -364,10 +364,15 @@ input[readonly] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: start;
 }
 
 .content-grid.two-col {
   grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+}
+
+.content-grid.balanced-two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .panel {
@@ -812,6 +817,23 @@ input[readonly] {
   line-height: 1.45;
 }
 
+.generation-quality-control {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(160px, 240px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.generation-quality-control > span {
+  font-weight: 700;
+}
+
+.generation-quality-control small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .queue-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(72px, 1fr));
@@ -1240,16 +1262,33 @@ th {
 
 .comic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
   gap: 12px;
+  align-items: stretch;
 }
 
 .grid-export-tools {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 120px minmax(160px, auto);
+  grid-template-columns: repeat(2, minmax(180px, 1fr)) minmax(180px, auto);
   gap: 12px;
   align-items: end;
   margin-bottom: 14px;
+}
+
+.grid-export-tools > label {
+  display: grid;
+  grid-template-rows: auto 44px;
+  gap: 7px;
+  margin: 0;
+}
+
+.grid-export-tools > button {
+  min-height: 44px;
+}
+
+.grid-export-summary {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .shot-card-list {
@@ -1390,9 +1429,13 @@ th {
 }
 
 .comic-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(5.1em, auto);
+  align-content: start;
   border: 2px solid #2b313d;
   border-radius: 8px;
   background: #11151d;
+  height: 100%;
   padding: 8px;
 }
 
@@ -1415,6 +1458,15 @@ th {
 .comic-panel small {
   display: block;
   margin-top: 6px;
+}
+
+.comic-panel small {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .image-modal {
@@ -1525,6 +1577,7 @@ th {
   .form-row,
   .topbar-controls,
   .settings-notes,
+  .generation-quality-control,
   .shot-card-body,
   .grid-export-tools {
     grid-template-columns: 1fr;
@@ -1542,6 +1595,103 @@ th {
 .schedule-stack {
   display: grid;
   gap: 18px;
+}
+
+.optional-planning-section {
+  border: 1px solid #303746;
+  border-radius: 8px;
+  background: #141821;
+  padding: 14px 18px;
+}
+
+.optional-planning-section > summary {
+  color: #e4e8ef;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.optional-planning-section[open] > summary {
+  margin-bottom: 8px;
+}
+
+.section-divider {
+  height: 1px;
+  margin: 18px 0;
+  background: #303746;
+}
+
+.actual-shot-progress {
+  display: grid;
+  gap: 12px;
+}
+
+.shot-progress-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+.shot-progress-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  border: 1px solid #303746;
+  border-radius: 6px;
+  background: #121720;
+  padding: 10px 12px;
+}
+
+.shot-progress-row.done,
+.shot-progress-row.locked {
+  border-color: #346d62;
+}
+
+.shot-progress-row.failed {
+  border-color: #714247;
+}
+
+.shot-progress-row strong,
+.shot-progress-row small {
+  display: block;
+}
+
+.shot-progress-row small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill {
+  border: 1px solid #3b4350;
+  border-radius: 999px;
+  background: #20252f;
+  color: #cbd3df;
+  padding: 5px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.status-pill.done {
+  border-color: #3f8f79;
+  background: #17302f;
+  color: #dff8f1;
+}
+
+.status-pill.failed {
+  border-color: #714247;
+  background: #24181d;
+  color: #ffd5d8;
+}
+
+.compact-button {
+  justify-self: start;
+  min-height: 36px;
+  width: auto;
 }
 
 .schedule-stats {
@@ -1676,10 +1826,23 @@ th {
   .schedule-stats {
     grid-template-columns: 1fr;
   }
+
+  .content-grid.balanced-two-col,
+  .shot-progress-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
   .task-row {
     grid-template-columns: 1fr;
+  }
+
+  .shot-progress-row {
+    grid-template-columns: 1fr;
+  }
+
+  .status-pill {
+    justify-self: start;
   }
 }

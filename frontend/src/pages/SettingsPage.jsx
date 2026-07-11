@@ -147,7 +147,7 @@ export default function SettingsPage() {
       };
       const [textResult, imageResult] = await Promise.all([
         runProbe("text", (signal) => api.testTextSettings(effectiveForm, signal), 120_000),
-        runProbe("image", (signal) => api.testImageSettings(effectiveForm, signal), 210_000),
+        runProbe("image", (signal) => api.testImageSettings(effectiveForm, signal), 225_000),
       ]);
       setMessage(
         textResult.ok && imageResult.ok ? t("connectionTested") : t("connectionTestFinishedWithErrors"),
@@ -376,15 +376,22 @@ function connectionErrorText(item) {
 
 function ConnectionResult({ label, result, t }) {
   const testing = result?.status === "testing";
+  const providerBusy = result?.status === "busy";
   const timedOut = result?.status === "timeout";
   const passed = result?.ok === true;
-  const errors = Array.isArray(result?.errors) ? result.errors.map(connectionErrorText).filter(Boolean) : [];
+  const errors = providerBusy && result?.reason === "active_generation"
+    ? [t("imageTestBlockedByGeneration")]
+    : providerBusy && result?.reason === "image_test_running"
+      ? [t("imageTestAlreadyRunning")]
+      : Array.isArray(result?.errors) ? result.errors.map(connectionErrorText).filter(Boolean) : [];
   return (
-    <div className={`connection-result ${testing ? "testing" : passed ? "passed" : "failed"}`}>
+    <div className={`connection-result ${testing || providerBusy ? "testing" : passed ? "passed" : "failed"}`}>
       <span>{label}</span>
       <strong>
         {testing
           ? t("connectionTesting")
+          : providerBusy
+            ? t("connectionBusy")
           : timedOut
             ? t("connectionTimedOut")
             : passed

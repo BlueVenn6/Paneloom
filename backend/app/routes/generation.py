@@ -37,6 +37,15 @@ _REFERENCE_JOBS: dict[str, dict] = {}
 MAX_RETAINED_JOBS = 200
 
 
+def active_image_job_count() -> int:
+    return sum(
+        1
+        for jobs in (_GENERATION_JOBS, _REFERENCE_JOBS)
+        for job in jobs.values()
+        if job.get("status") in {"queued", "running"}
+    )
+
+
 def _prune_jobs(jobs: dict[str, dict]) -> None:
     if len(jobs) < MAX_RETAINED_JOBS:
         return
@@ -314,6 +323,17 @@ def start_reference_concept_job(
         require_project(project_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    from backend.app.routes.settings import image_provider_test_running
+
+    if image_provider_test_running():
+        return ApiResponse(
+            ok=False,
+            message="An image provider test is still running.",
+            data={
+                "error_code": "image_test_running",
+                "error_message": "Wait for the image provider test to finish before generating assets.",
+            },
+        )
     _prune_jobs(_REFERENCE_JOBS)
     job_id = f"ref-job-{uuid4().hex[:12]}"
     _REFERENCE_JOBS[job_id] = {
@@ -419,6 +439,33 @@ def start_generation_job(
             raise FileNotFoundError(f"Shot not found: {shot_id}")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    from backend.app.routes.settings import image_provider_test_running
+
+    if image_provider_test_running():
+        return ApiResponse(
+            ok=False,
+            message="An image provider test is still running.",
+            data={
+                "error_code": "image_test_running",
+                "error_message": "Wait for the image provider test to finish before generating this shot.",
+            },
+        )
+    existing = next(
+        (
+            job
+            for job in _GENERATION_JOBS.values()
+            if job.get("project_id") == project_id
+            and job.get("shot_id") == shot_id
+            and job.get("status") in {"queued", "running"}
+        ),
+        None,
+    )
+    if existing:
+        return ApiResponse(
+            ok=True,
+            message="This shot already has an active generation job.",
+            data=_safe_job_snapshot(existing),
+        )
     _prune_jobs(_GENERATION_JOBS)
     job_id = f"job-{uuid4().hex[:12]}"
     request_payload = payload or ImageGenerationRequest()

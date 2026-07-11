@@ -3,12 +3,15 @@ import json
 import uuid
 import mimetypes
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import requests
 
 
 IMAGE_REQUEST_TIMEOUT_SECONDS = 240
+IMAGE_CONNECT_TIMEOUT_SECONDS = 30
+IMAGE_TOTAL_TIMEOUT_SECONDS = 900
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -59,6 +62,35 @@ def _download_image(url: str, output_path: Path, timeout: int = 30, retries: int
     raise RuntimeError(
         f"Image download failed after {retries + 1} attempts: {last_error}"
     ) from last_error
+
+
+def _set_stream_socket_timeout(response, seconds: float) -> None:
+    try:
+        response.raw._fp.fp.raw._sock.settimeout(max(0.1, seconds))
+    except (AttributeError, OSError):
+        pass
+
+
+def _consume_response_before_deadline(response, deadline: float) -> None:
+    """Read a streamed response with a wall-clock deadline, including keep-alive chunks."""
+    if not hasattr(response, "iter_content"):
+        return
+    chunks: list[bytes] = []
+    iterator = response.iter_content(chunk_size=64 * 1024)
+    while True:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            response.close()
+            raise requests.ReadTimeout("Image provider exceeded the total response deadline.")
+        _set_stream_socket_timeout(response, remaining)
+        try:
+            chunk = next(iterator)
+        except StopIteration:
+            break
+        if chunk:
+            chunks.append(chunk)
+    response._content = b"".join(chunks)
+    response._content_consumed = True
 
 
 def _extract_image_payload(data: dict[str, Any]) -> dict[str, str]:
@@ -213,6 +245,8 @@ def generate_image(
     size: str | None = None,
     quality: str | None = None,
     output_path: str | Path | None = None,
+    request_timeout_seconds: int | None = None,
+    total_timeout_seconds: int | None = None,
 ) -> dict:
     api_key = config.get("api_key")
     base_url = config.get("base_url")
@@ -229,14 +263,19 @@ def generate_image(
     }
     endpoint = _endpoint(base_url, "/images/generations")
     result_mode = config.get("image_result_mode") or "auto"
+    request_timeout = max(1, int(request_timeout_seconds or IMAGE_REQUEST_TIMEOUT_SECONDS))
+    total_timeout = max(1, int(total_timeout_seconds or IMAGE_TOTAL_TIMEOUT_SECONDS))
 
     def _post_generation(request_payload: dict[str, Any], request_endpoint: str) -> dict:
+        deadline = monotonic() + total_timeout
         response = requests.post(
             request_endpoint,
             headers={**_headers(api_key), "Content-Type": "application/json"},
             json=request_payload,
-            timeout=(30, IMAGE_REQUEST_TIMEOUT_SECONDS),
+            timeout=(IMAGE_CONNECT_TIMEOUT_SECONDS, request_timeout),
+            stream=True,
         )
+        _consume_response_before_deadline(response, deadline)
         parse_exception = None
         try:
             data = response.json()
@@ -371,6 +410,8 @@ def edit_image(
     size: str | None = None,
     quality: str | None = None,
     output_path: str | Path | None = None,
+    request_timeout_seconds: int | None = None,
+    total_timeout_seconds: int | None = None,
 ) -> dict:
     api_key = config.get("api_key")
     base_url = config.get("base_url")
@@ -391,10 +432,13 @@ def edit_image(
         "quality": quality or config.get("image_quality") or "low",
     }
     endpoint = _endpoint(base_url, "/images/edits")
+    request_timeout = max(1, int(request_timeout_seconds or IMAGE_REQUEST_TIMEOUT_SECONDS))
+    total_timeout = max(1, int(total_timeout_seconds or IMAGE_TOTAL_TIMEOUT_SECONDS))
 
     def _post_edit(request_endpoint: str) -> tuple[requests.Response, dict, Exception | None]:
         open_files = [path.open("rb") for path in paths]
         try:
+            deadline = monotonic() + total_timeout
             files = [
                 (
                     "image",
@@ -411,8 +455,10 @@ def edit_image(
                 headers=_headers(api_key),
                 data=data,
                 files=files,
-                timeout=(30, IMAGE_REQUEST_TIMEOUT_SECONDS),
+                timeout=(IMAGE_CONNECT_TIMEOUT_SECONDS, request_timeout),
+                stream=True,
             )
+            _consume_response_before_deadline(response, deadline)
         finally:
             for file in open_files:
                 file.close()

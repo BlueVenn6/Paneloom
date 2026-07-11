@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+import json
+import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
@@ -7,6 +9,7 @@ from time import perf_counter
 from fastapi import APIRouter, HTTPException
 
 from backend.app.config import (
+    APP_CONFIG_DIR,
     OFFICIAL_BASE_URL,
     get_active_settings,
     get_text_api_config,
@@ -16,7 +19,7 @@ from backend.app.config import (
     validate_api_settings,
     validate_text_settings,
 )
-from backend.app.models.schemas import ApiResponse, SettingsPayload
+from backend.app.models.schemas import ApiResponse, SettingsPayload, UiPreferencesPayload
 
 from api.openai_image_client import generate_image
 from api.openai_text_client import generate_text
@@ -24,6 +27,42 @@ from api.openai_text_client import generate_text
 router = APIRouter(prefix="/settings", tags=["settings"])
 _TEXT_TEST_LOCK = Lock()
 _IMAGE_TEST_LOCK = Lock()
+IMAGE_TEST_TIMEOUT_SECONDS = 180
+UI_PREFERENCES_PATH = APP_CONFIG_DIR / "ui-preferences.json"
+
+
+def image_provider_test_running() -> bool:
+    return _IMAGE_TEST_LOCK.locked()
+
+
+@router.get("/ui-preferences")
+def get_ui_preferences() -> ApiResponse:
+    data = {"current_project_id": "", "language_selection": "system"}
+    if UI_PREFERENCES_PATH.is_file():
+        try:
+            saved = json.loads(UI_PREFERENCES_PATH.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                data.update(UiPreferencesPayload(**saved).model_dump())
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    return ApiResponse(ok=True, message="UI preferences loaded.", data=data)
+
+
+@router.post("/ui-preferences")
+def save_ui_preferences(payload: UiPreferencesPayload) -> ApiResponse:
+    UI_PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = UI_PREFERENCES_PATH.with_name(
+        f".{UI_PREFERENCES_PATH.name}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        temporary_path.write_text(
+            json.dumps(payload.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(UI_PREFERENCES_PATH)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return ApiResponse(ok=True, message="UI preferences saved.", data=payload.model_dump())
 
 
 def _merge_existing_secret(payload: SettingsPayload) -> dict:
@@ -124,8 +163,26 @@ def test_text_settings(payload: SettingsPayload | None = None) -> ApiResponse:
 def test_image_settings(payload: SettingsPayload | None = None) -> ApiResponse:
     settings, source = _settings_for_test(payload)
     errors = validate_api_settings(settings)
-    if not _IMAGE_TEST_LOCK.acquire(blocking=False):
-        result = {"ok": False, "status": "busy", "errors": ["An image provider test is already running."]}
+    from backend.app.routes.generation import active_image_job_count
+
+    active_jobs = active_image_job_count()
+    if active_jobs:
+        result = {
+            "ok": False,
+            "status": "busy",
+            "reason": "active_generation",
+            "errors": [
+                f"{active_jobs} storyboard/reference image task(s) are still running. "
+                "Wait for them to finish before starting a paid image connection test."
+            ],
+        }
+    elif not _IMAGE_TEST_LOCK.acquire(blocking=False):
+        result = {
+            "ok": False,
+            "status": "busy",
+            "reason": "image_test_running",
+            "errors": ["An image provider test is already running."],
+        }
     else:
         try:
             result = (
@@ -183,6 +240,8 @@ def _test_image_generation(settings: dict) -> dict:
             size="1024x1024",
             quality="low",
             output_path=output_path,
+            request_timeout_seconds=IMAGE_TEST_TIMEOUT_SECONDS,
+            total_timeout_seconds=IMAGE_TEST_TIMEOUT_SECONDS,
         )
         saved = output_path.is_file() and output_path.stat().st_size > 0
     elapsed = round(perf_counter() - started, 2)

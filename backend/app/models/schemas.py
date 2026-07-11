@@ -50,6 +50,7 @@ class ProjectWorkspacePayload(BaseModel):
     use_ai: bool = True
     visual_format: Literal["single_panel", "webtoon_strip"] = "webtoon_strip"
     panel_gutter_style: Literal["framed", "seamless"] = "framed"
+    generation_quality: Literal["low", "medium", "high"] = "medium"
     selected_aspects: list[str] = Field(default_factory=lambda: ["vertical_9_16"])
     selected_reference_filenames: list[str] = Field(default_factory=list)
 
@@ -334,3 +335,8 @@ class SettingsPayload(BaseModel):
     image_quality: Literal["low", "medium", "high"] = "low"
     image_result_mode: Literal["auto", "prefer_b64_json", "url_only"] = "auto"
     clear_saved_keys: bool = False
+
+
+class UiPreferencesPayload(BaseModel):
+    current_project_id: str = ""
+    language_selection: Literal["system", "zh-CN", "zh-TW", "en", "ja", "ko"] = "system"

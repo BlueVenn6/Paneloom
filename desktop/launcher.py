@@ -194,6 +194,10 @@ def run_window(port: int = 0) -> None:
             active_jobs_interrupted=_HARD_EXIT_REQUIRED,
             forced_server_shutdown=forced_server_shutdown,
         )
+        # Edge WebView2 can retain cache workers after a normal window close.
+        # The window and API server are already stopped, so exit this launcher
+        # process explicitly to preserve the desktop zero-residual-process contract.
+        _HARD_EXIT_REQUIRED = True
 
 
 def _monitor_frontend_runtime(window, log_path: Path) -> None:

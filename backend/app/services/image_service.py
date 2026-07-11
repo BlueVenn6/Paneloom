@@ -240,7 +240,12 @@ def _reference_edit_failure_message(result: dict) -> str:
         or result.get("short_error")
         or "reference_edit_failed"
     )
-    if status_code in {"408", "504", "524"} or "timeout" in str(message).lower():
+    if (
+        status_code in {"408", "504", "524"}
+        or result.get("error_code") == "request_timeout"
+        or result.get("error") == "request_timeout"
+        or "timeout" in str(message).lower()
+    ):
         return (
             "参考图已随请求上传，但图片编辑接口上游超时，未返回结果。"
             "这不是前端 fetch，也不是本地限制时间；需要中转站的 /images/edits "
