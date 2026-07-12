@@ -45,13 +45,12 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from api.openai_image_client import edit_image, generate_image  # noqa: E402
+from api.openai_image_client import generate_image  # noqa: E402
 from api.openai_text_client import generate_text, generate_text_with_image  # noqa: E402
 
 _GENERATION_LOCKS: dict[str, Lock] = {}
 _LOG_LOCKS: dict[str, Lock] = {}
 _IMAGE_PROVIDER_SLOTS = BoundedSemaphore(2)
-REFERENCE_EDIT_MAX_SIDE = 768
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 REFERENCE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 
@@ -59,15 +58,6 @@ REFERENCE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 def _bounded_generate_image(*args, **kwargs):
     with _IMAGE_PROVIDER_SLOTS:
         return generate_image(*args, **kwargs)
-
-
-def _bounded_edit_image(*args, **kwargs):
-    with _IMAGE_PROVIDER_SLOTS:
-        return edit_image(*args, **kwargs)
-# Reference generation must upload the selected image to the provider. If this
-# endpoint is unavailable, fail visibly instead of pretending text-only generation
-# used the image.
-USE_DIRECT_REFERENCE_EDIT = True
 
 
 def _generation_stamp() -> str:
@@ -195,16 +185,6 @@ def _reference_paths(project_id: str, filenames: list[str] | None) -> list[Path]
     return paths
 
 
-def _reference_prompt_note(reference_paths: list[Path]) -> str:
-    if not reference_paths:
-        return ""
-    names = ", ".join(path.stem for path in reference_paths)
-    return (
-        "Use the attached project reference images as continuity anchors for "
-        f"character appearance, costumes, props, and visual style: {names}."
-    )
-
-
 def _direct_reference_prompt_note(reference_paths: list[Path]) -> str:
     if not reference_paths:
         return ""
@@ -230,54 +210,6 @@ def _direct_reference_prompt_note(reference_paths: list[Path]) -> str:
         "hair silhouette, clothing logic, recurring props, style anchors, palette logic, "
         "line quality, and storyboard panel composition. Obey the current STYLE LOCK above."
     )
-
-
-def _reference_edit_failure_message(result: dict) -> str:
-    status_code = str(result.get("status_code") or "")
-    message = (
-        result.get("error_message")
-        or result.get("error")
-        or result.get("short_error")
-        or "reference_edit_failed"
-    )
-    if (
-        status_code in {"408", "504", "524"}
-        or result.get("error_code") == "request_timeout"
-        or result.get("error") == "request_timeout"
-        or "timeout" in str(message).lower()
-    ):
-        return (
-            "参考图已随请求上传，但图片编辑接口上游超时，未返回结果。"
-            "这不是前端 fetch，也不是本地限制时间；需要中转站的 /images/edits "
-            "或等价图片参考接口能稳定完成。"
-        )
-    return f"参考图上传生成失败：{message}"
-
-
-def _optimized_reference_paths(project_id: str, reference_paths: list[Path]) -> list[Path]:
-    if not reference_paths:
-        return []
-    cache_dir = get_project_reference_dir(project_id) / ".optimized"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    optimized_paths: list[Path] = []
-    for source_path in reference_paths:
-        target_path = cache_dir / f"{source_path.stem}-edit-{REFERENCE_EDIT_MAX_SIDE}.png"
-        try:
-            source_mtime = source_path.stat().st_mtime
-            if target_path.exists() and target_path.stat().st_mtime >= source_mtime:
-                optimized_paths.append(target_path)
-                continue
-            with Image.open(source_path) as image:
-                image = ImageOps.exif_transpose(image).convert("RGB")
-                image.thumbnail(
-                    (REFERENCE_EDIT_MAX_SIDE, REFERENCE_EDIT_MAX_SIDE),
-                    Image.Resampling.LANCZOS,
-                )
-                image.save(target_path, format="PNG", optimize=True)
-            optimized_paths.append(target_path)
-        except OSError:
-            optimized_paths.append(source_path)
-    return optimized_paths
 
 
 def _parse_size(size: str) -> tuple[int, int] | None:
@@ -572,10 +504,6 @@ def _generate_shot_image_locked(
         project_id,
         request.reference_filenames if request else [],
     )
-    edit_reference_paths = _optimized_reference_paths(project_id, reference_paths)
-    reference_note = _reference_prompt_note(reference_paths) if USE_DIRECT_REFERENCE_EDIT else ""
-    if reference_note:
-        prompt = f"{prompt}\n\n{reference_note}"
     sequence_note = _sequence_context_note(project_id, shot_id)
     if sequence_note:
         prompt = f"{sequence_note}\n\n{prompt}"
@@ -667,28 +595,16 @@ def _generate_shot_image_locked(
         output_path = output_dir / filename
         size_prompt = f"{prompt}\n\n{_target_aspect_note(size_item)}"
         provider_size = size_item.get("generation_size") or size_item["size"]
-        if edit_reference_paths and USE_DIRECT_REFERENCE_EDIT:
-            result = _bounded_edit_image(
-                settings,
-                prompt=size_prompt,
-                image_path=edit_reference_paths,
-                size=provider_size,
-                quality=request.quality if request else None,
-                output_path=output_path,
-            )
-            if not result.get("ok"):
-                result["error_message"] = _reference_edit_failure_message(result)
-        else:
-            direct_reference_note = _direct_reference_prompt_note(reference_paths)
-            if direct_reference_note:
-                size_prompt = f"{size_prompt}\n\n{direct_reference_note}"
-            result = _bounded_generate_image(
-                settings,
-                prompt=size_prompt,
-                size=provider_size,
-                quality=request.quality if request else None,
-                output_path=output_path,
-            )
+        direct_reference_note = _direct_reference_prompt_note(reference_paths)
+        if direct_reference_note:
+            size_prompt = f"{size_prompt}\n\n{direct_reference_note}"
+        result = _bounded_generate_image(
+            settings,
+            prompt=size_prompt,
+            size=provider_size,
+            quality=request.quality if request else None,
+            output_path=output_path,
+        )
         result["aspect_preset"] = size_item["id"]
         result["aspect_label"] = size_item["label"]
         result["target_size"] = size_item["size"]
@@ -1575,94 +1491,8 @@ def edit_shot_with_reference(
     reference_path = get_project_reference_dir(project_id) / Path(reference_filename).name
     if not reference_path.exists():
         raise FileNotFoundError(f"Reference image not found: {reference_filename}")
-
-    settings = get_active_settings(include_secret=True)
-    config_errors = validate_api_settings(settings)
-    if request and request.prompt:
-        prompt = request.prompt
-        bible_negative = ""
-    else:
-        prompt, bible_negative = apply_bible_to_shot_prompt(shot, get_project_bible(project_id))
-    if shot.get("negative_prompt"):
-        prompt = f"{prompt}\n\nNegative prompt: {shot['negative_prompt']}"
-    elif bible_negative:
-        prompt = f"{prompt}\n\nNegative prompt: {bible_negative}"
-    prompt = (
-        f"{_visual_format_note(request.visual_format if request else 'single_panel', request.panel_gutter_style if request else 'framed')}\n\n"
-        f"{prompt}\n\n"
-        "Use the uploaded reference image as a visual continuity reference for character/style/asset consistency. "
-        "Preserve the requested STYLE LOCK and do not copy unrelated content from the reference."
+    payload = request.model_copy(deep=True) if request else ImageGenerationRequest()
+    payload.reference_filenames = list(
+        dict.fromkeys([*payload.reference_filenames, Path(reference_filename).name])
     )
-    if config_errors:
-        update_shot(project_id, shot_id, {"status": "failed"})
-        return {
-            "project_id": project_id,
-            "shot_id": shot_id,
-            "status": "failed",
-            "error": "configuration_error",
-            "error_message": " ".join(config_errors),
-        }
-
-    output_dir = get_project_generated_dir(project_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    version_stamp = _generation_stamp()
-    timestamp = utc_now()
-    filename = f"{shot_id}-edit-{version_stamp}.png"
-    output_path = output_dir / filename
-    result = _bounded_edit_image(
-        settings,
-        prompt=prompt,
-        image_path=reference_path,
-        size=request.size if request else None,
-        quality=request.quality if request else None,
-        output_path=output_path,
-    )
-    if result.get("ok") and result.get("output_path"):
-        saved_path = to_project_relative_path(project_id, result.get("output_path") or "")
-        output_url = _public_asset_url(project_id, filename) if saved_path else result.get("output_url", "")
-        version_entry = {
-            "version_id": version_stamp,
-            "created_at": timestamp,
-            "status": "done",
-            "output_path": saved_path,
-            "output_url": output_url,
-            "outputs": [
-                {
-                    "aspect_preset": "reference_edit",
-                    "aspect_label": "Reference edit",
-                    "output_path": saved_path,
-                    "output_url": output_url,
-                    "status": result.get("status", "done"),
-                }
-            ],
-        }
-        existing_versions = shot.get("versions") if isinstance(shot.get("versions"), list) else []
-        update_shot(
-            project_id,
-            shot_id,
-            {
-                "status": "done",
-                "output_path": saved_path,
-                "output_url": output_url,
-                "versions": [*existing_versions, version_entry],
-                "selected_version_id": version_stamp,
-                "generation_error": "",
-            },
-        )
-        return {
-            "project_id": project_id,
-            "shot_id": shot_id,
-            "status": "done",
-            "output_path": saved_path,
-            "output_url": output_url,
-            "error": "",
-        }
-
-    update_shot(project_id, shot_id, {"status": "failed"})
-    return {
-        "project_id": project_id,
-        "shot_id": shot_id,
-        "status": "failed",
-        "error": result.get("error", "image_edit_failed"),
-        "error_message": result.get("error_message", ""),
-    }
+    return generate_shot_image(project_id, shot_id, payload)

@@ -257,7 +257,7 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertEqual((export_stage["completed"], export_stage["total"]), (1, 1))
         review = generate_review(
             project_id,
-            ReviewRequest(period="week", anchor_date="2026-07-11"),
+            ReviewRequest(period="week", anchor_date=next(iter(second["by_date"]))),
         )
         self.assertEqual(review["automatic_active_minutes"], 1)
         self.assertEqual(review["progress_source"], "project_state")
@@ -692,9 +692,8 @@ class IsolatedProjectTestCase(unittest.TestCase):
 
         observed = {}
 
-        def fake_edit(config, prompt, image_path, size, quality, output_path):
+        def fake_generate(config, prompt, size, quality, output_path):
             observed["prompt"] = prompt
-            observed["image_paths"] = [Path(item) for item in image_path]
             Image.new("RGB", (64, 64), color=(40, 60, 90)).save(output_path)
             return {
                 "ok": True,
@@ -703,7 +702,7 @@ class IsolatedProjectTestCase(unittest.TestCase):
                 "output_url": "",
                 "download_status": "saved_b64_json",
                 "download_error": "",
-                "endpoint": "https://example.invalid/images/edits",
+                "endpoint": "https://example.invalid/images/generations",
                 "model": "controlled-image",
                 "size": size,
                 "quality": quality,
@@ -721,7 +720,7 @@ class IsolatedProjectTestCase(unittest.TestCase):
         }
         with (
             patch.object(image_service, "get_active_settings", return_value=settings),
-            patch.object(image_service, "edit_image", side_effect=fake_edit) as edit_call,
+            patch.object(image_service, "generate_image", side_effect=fake_generate) as generate_call,
         ):
             result = image_service.generate_shot_image(
                 project["project_id"],
@@ -734,11 +733,11 @@ class IsolatedProjectTestCase(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "done")
-        edit_call.assert_called_once()
-        self.assertTrue(observed["image_paths"])
-        self.assertTrue(all(path.is_file() for path in observed["image_paths"]))
+        generate_call.assert_called_once()
         self.assertIn("Hero wears a red coat", observed["prompt"])
         self.assertIn("Rainy station platform", observed["prompt"])
+        self.assertIn(reference["filename"].rsplit(".", 1)[0], observed["prompt"])
+        self.assertIn("direct generation endpoint does not receive image pixels", observed["prompt"])
 
     def test_duplicate_shot_generation_reuses_the_active_job(self):
         project = self.create_project("Duplicate generation")

@@ -2414,7 +2414,9 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                         {shot.generation_error && (
                           <div className="row-error">{localizedGenerationError(shot.generation_error)}</div>
                         )}
-                        {shotErrors[shot.shot_id] && (
+                        {shotErrors[shot.shot_id] &&
+                          shotErrors[shot.shot_id] !==
+                            localizedGenerationError(shot.generation_error) && (
                           <div className="row-error">{shotErrors[shot.shot_id]}</div>
                         )}
                         {(shotProgress[shot.shot_id] || shot.status === "failed") && (
@@ -2742,34 +2744,43 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
               </div>
             </div>
 
-            <div className="grid-export-tools">
-              <label>
-                <span>{t("gridCanvas")}</span>
-                <select value={gridAspect} onChange={(event) => setGridAspect(event.target.value)}>
-                  {aspectPresets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {aspectLabel(preset, t)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>{t("imagesPerRow")}</span>
-                <input
-                  min="1"
-                  max="4"
-                  type="number"
-                  value={gridColumns}
-                  onChange={(event) => setGridColumns(event.target.value)}
-                />
-              </label>
-              <button className="primary" onClick={exportComicGridPng} type="button">
-                {t("exportGridPng")}
-              </button>
-              <small className="muted grid-export-summary">
-                {t("gridExportSummary")} {generatedShots.length} · {t("gridRows")} {Math.ceil(generatedShots.length / Math.max(1, Number(gridColumns) || 1))}
-              </small>
-            </div>
+            <section className="grid-export-section" aria-labelledby="comic-grid-export-title">
+              <div>
+                <strong id="comic-grid-export-title">{t("comicGridExport")}</strong>
+                <p className="muted">{t("comicGridExportHint")}</p>
+              </div>
+              <div className="grid-export-tools">
+                <label>
+                  <span>{t("gridCanvas")}</span>
+                  <select value={gridAspect} onChange={(event) => setGridAspect(event.target.value)}>
+                    {aspectPresets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {aspectLabel(preset, t)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>{t("imagesPerRow")}</span>
+                  <select
+                    value={gridColumns}
+                    onChange={(event) => setGridColumns(Number(event.target.value))}
+                  >
+                    {[1, 2, 3, 4].map((columns) => (
+                      <option key={columns} value={columns}>
+                        {columns} {t("columns")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="primary" onClick={exportComicGridPng} type="button">
+                  {t("exportGridPng")}
+                </button>
+                <small className="muted grid-export-summary">
+                  {t("gridExportSummary")} {generatedShots.length} · {t("gridRows")} {Math.ceil(generatedShots.length / Math.max(1, Number(gridColumns) || 1))}
+                </small>
+              </div>
+            </section>
           </div>
         </div>
       </section>

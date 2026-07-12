@@ -1262,9 +1262,22 @@ th {
 
 .comic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   align-items: stretch;
+}
+
+.grid-export-section {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid #303746;
+}
+
+.grid-export-section p {
+  margin: 6px 0 0;
+  max-width: 760px;
+  line-height: 1.5;
 }
 
 .grid-export-tools {
@@ -1589,6 +1602,10 @@ th {
 
   .shot-card-header {
     display: grid;
+  }
+
+  .comic-grid {
+    grid-template-columns: 1fr;
   }
 }
 
