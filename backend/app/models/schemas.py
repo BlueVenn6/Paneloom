@@ -113,6 +113,14 @@ class ShotReorderRequest(BaseModel):
     shot_ids: list[str] = Field(..., min_length=1)
 
 
+class ShotMergeNextRequest(BaseModel):
+    next_shot_id: str = Field(..., min_length=1)
+
+
+class ShotPairMergeRequest(BaseModel):
+    shot_ids: list[str] = Field(..., min_length=2)
+
+
 class ShotRewriteRequest(BaseModel):
     script: str = ""
     style: str = "black and white manga storyboard"

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from backend.app import config
 from backend.app.models.schemas import (
     ProjectCreate,
     ProjectWorkspacePayload,
@@ -33,7 +34,9 @@ class ProjectPortabilityTests(unittest.TestCase):
         self.legacy_references = self.root / "legacy assets" / "references"
         self.legacy_exports = self.root / "legacy exports"
         self.migration_log = self.root / "app data" / "logs" / "migrations.jsonl"
+        self.settings_path = self.root / "app data" / "config" / "settings.json"
         self.patchers = [
+            patch.object(config, "SETTINGS_PATH", self.settings_path),
             patch.object(project_service, "PROJECTS_DIR", self.legacy_projects),
             patch.object(project_service, "PROJECTS_HOME", self.projects_home),
             patch.object(project_service, "REGISTRY_PATH", self.registry),

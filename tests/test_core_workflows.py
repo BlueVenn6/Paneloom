@@ -53,6 +53,8 @@ from backend.app.services.shotlist_service import (
     add_shot,
     apply_bible_to_shot_prompt,
     list_shots,
+    merge_adjacent_shot_pairs,
+    merge_shot_with_next,
     select_shot_version,
     update_shot,
 )
@@ -83,6 +85,85 @@ class IsolatedProjectTestCase(unittest.TestCase):
 
     def create_project(self, name="Test Project"):
         return project_service.create_project(ProjectCreate(name=name))
+
+    def test_adjacent_shots_merge_into_one_keyframe_without_losing_text(self):
+        project = self.create_project("Merge adjacent")
+        first = add_shot(
+            project["project_id"],
+            ShotCreate(
+                scene_id="P001",
+                prompt="主角推开门",
+                visual_description="主角站在门外",
+                revision_notes="旁白：他终于到了。",
+                duration=2,
+            ),
+        )
+        second = add_shot(
+            project["project_id"],
+            ShotCreate(
+                scene_id="P002",
+                prompt="主角看见空房间",
+                visual_description="房间里只有一把椅子",
+                revision_notes="主角：有人吗？",
+                duration=3,
+            ),
+        )
+        add_shot(project["project_id"], ShotCreate(scene_id="P003", prompt="灯光熄灭"))
+
+        result = merge_shot_with_next(project["project_id"], first["shot_id"], second["shot_id"])
+
+        self.assertEqual(result["merged_count"], 1)
+        shots = list_shots(project["project_id"])
+        self.assertEqual(len(shots), 2)
+        self.assertEqual([shot["scene_id"] for shot in shots], ["P001", "P002"])
+        self.assertIn("主角推开门", shots[0]["prompt"])
+        self.assertIn("主角看见空房间", shots[0]["prompt"])
+        self.assertIn("主角站在门外", shots[0]["visual_description"])
+        self.assertIn("房间里只有一把椅子", shots[0]["visual_description"])
+        self.assertEqual(shots[0]["duration"], 5)
+        self.assertEqual(shots[0]["merged_from_shot_ids"], [first["shot_id"], second["shot_id"]])
+
+    def test_pair_merge_compresses_even_storyboard_atomically(self):
+        project = self.create_project("Pair merge")
+        created = [
+            add_shot(
+                project["project_id"],
+                ShotCreate(scene_id=f"P{index:03d}", prompt=f"Beat {index}"),
+            )
+            for index in range(1, 7)
+        ]
+
+        result = merge_adjacent_shot_pairs(
+            project["project_id"],
+            [shot["shot_id"] for shot in created],
+        )
+
+        self.assertEqual(result["merged_count"], 3)
+        shots = list_shots(project["project_id"])
+        self.assertEqual(len(shots), 3)
+        self.assertEqual([shot["scene_id"] for shot in shots], ["P001", "P002", "P003"])
+        self.assertIn("Beat 1", shots[0]["prompt"])
+        self.assertIn("Beat 2", shots[0]["prompt"])
+
+    def test_pair_merge_rejects_generated_or_locked_panels_without_partial_write(self):
+        project = self.create_project("Protected merge")
+        first = add_shot(project["project_id"], ShotCreate(scene_id="P001", prompt="Beat 1"))
+        second = add_shot(project["project_id"], ShotCreate(scene_id="P002", prompt="Beat 2"))
+        update_shot(
+            project["project_id"],
+            second["shot_id"],
+            {"versions": [{"version_id": "protected-version"}]},
+        )
+
+        with self.assertRaisesRegex(ValueError, "generated images or image versions"):
+            merge_adjacent_shot_pairs(
+                project["project_id"],
+                [first["shot_id"], second["shot_id"]],
+            )
+
+        shots = list_shots(project["project_id"])
+        self.assertEqual(len(shots), 2)
+        self.assertEqual(shots[1]["versions"][0]["version_id"], "protected-version")
 
     def test_project_workspace_is_isolated_and_lifecycle_is_recoverable(self):
         first = self.create_project("First")

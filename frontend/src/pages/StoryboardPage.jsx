@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Lock, Unlock } from "lucide-react";
+import { Combine, Lock, Unlock } from "lucide-react";
 
 import { api, assetUrl } from "../api";
 import { useI18n } from "../i18n.jsx";
@@ -1367,6 +1367,70 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     await run("delete-shot", () => api.deleteShot(currentProject.project_id, shotId));
   }
 
+  function shotMergeBlocked(shot) {
+    return Boolean(
+      !shot ||
+        shot.locked ||
+        shot.approval_status === "approved" ||
+        shot.status === "generating" ||
+        shot.output_path ||
+        shot.output_url ||
+        shot.selected_version_id ||
+        (Array.isArray(shot.outputs) && shot.outputs.length > 0) ||
+        (Array.isArray(shot.versions) && shot.versions.length > 0),
+    );
+  }
+
+  async function mergeWithNext(index) {
+    if (!currentProject) return;
+    const shot = shots[index];
+    const nextShot = shots[index + 1];
+    if (!shot || !nextShot) return;
+    if (shotMergeBlocked(shot) || shotMergeBlocked(nextShot)) {
+      setMessage(t("mergeShotUnavailable"));
+      return;
+    }
+    if (!window.confirm(t("mergeNextShotConfirm"))) return;
+    await run(`merge-shot-${shot.shot_id}`, async () => {
+      const response = await api.mergeShotWithNext(
+        currentProject.project_id,
+        shot.shot_id,
+        nextShot.shot_id,
+      );
+      return {
+        ...response,
+        localizedMessage: `${t("mergedShotSuccess")} ${response.data?.shots?.length || shots.length - 1}`,
+      };
+    });
+  }
+
+  async function mergeAdjacentPairs() {
+    if (!currentProject || shots.length < 2) return;
+    const pairedShots = shots.slice(0, shots.length - (shots.length % 2));
+    if (pairedShots.some(shotMergeBlocked)) {
+      setMessage(t("mergeProtectedShot"));
+      return;
+    }
+    const nextCount = Math.ceil(shots.length / 2);
+    if (
+      !window.confirm(
+        `${t("mergeAdjacentPairsConfirm")} ${shots.length} → ${nextCount}`,
+      )
+    ) {
+      return;
+    }
+    await run("merge-shot-pairs", async () => {
+      const response = await api.mergeAdjacentShotPairs(
+        currentProject.project_id,
+        shots.map((shot) => shot.shot_id),
+      );
+      return {
+        ...response,
+        localizedMessage: `${t("mergedShotSuccess")} ${response.data?.shots?.length || nextCount}`,
+      };
+    });
+  }
+
   async function handleSelectVersion(shotId, versionId) {
     if (!currentProject || !versionId) return;
     await run(`select-version-${shotId}`, () =>
@@ -2334,9 +2398,23 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           </div>
 
           <div className="panel shot-table-panel">
-            <div className="section-heading">
-              <p className="eyebrow">{t("storyboard")}</p>
-              <h3>{t("storyboardList")} · {shots.length} {t("panelCount")}</h3>
+            <div className="section-heading storyboard-list-heading">
+              <div>
+                <p className="eyebrow">{t("storyboard")}</p>
+                <h3>{t("storyboardList")} · {shots.length} {t("panelCount")}</h3>
+              </div>
+              <div className="merge-pair-tools">
+                <button
+                  className="secondary"
+                  disabled={shots.length < 2 || Boolean(busy)}
+                  onClick={mergeAdjacentPairs}
+                  type="button"
+                >
+                  <Combine aria-hidden="true" size={16} />
+                  {t("mergeAdjacentPairs")}
+                </button>
+                <small className="muted">{t("mergeAdjacentPairsHint")}</small>
+              </div>
             </div>
             <div className="shot-card-list">
               {shots.length === 0 && (
@@ -2591,6 +2669,26 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                             {shot.locked ? <Unlock aria-hidden="true" size={16} /> : <Lock aria-hidden="true" size={16} />}
                             {shot.locked ? t("unlockShot") : t("approveAndLock")}
                           </button>
+                          {index < shots.length - 1 && (
+                            <button
+                              className="secondary"
+                              disabled={
+                                Boolean(busy) ||
+                                shotMergeBlocked(shot) ||
+                                shotMergeBlocked(shots[index + 1])
+                              }
+                              onClick={() => mergeWithNext(index)}
+                              title={
+                                shotMergeBlocked(shot) || shotMergeBlocked(shots[index + 1])
+                                  ? t("mergeShotUnavailable")
+                                  : t("mergeNextShot")
+                              }
+                              type="button"
+                            >
+                              <Combine aria-hidden="true" size={16} />
+                              {t("mergeNextShot")}
+                            </button>
+                          )}
                           <button
                             className="secondary danger"
                             disabled={shot.locked}

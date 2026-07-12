@@ -396,6 +396,38 @@ input[readonly] {
   font-size: 18px;
 }
 
+.storyboard-list-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.storyboard-list-heading p,
+.storyboard-list-heading h3 {
+  margin-top: 0;
+}
+
+.merge-pair-tools {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  max-width: 520px;
+}
+
+.merge-pair-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+}
+
+.merge-pair-tools small {
+  line-height: 1.45;
+  text-align: right;
+}
+
 .strong {
   margin-bottom: 8px;
   font-weight: 700;
@@ -1606,6 +1638,19 @@ th {
 
   .comic-grid {
     grid-template-columns: 1fr;
+  }
+
+  .storyboard-list-heading {
+    display: grid;
+  }
+
+  .merge-pair-tools {
+    justify-items: stretch;
+    max-width: none;
+  }
+
+  .merge-pair-tools small {
+    text-align: left;
   }
 }
 

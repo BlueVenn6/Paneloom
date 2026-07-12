@@ -4,6 +4,8 @@ from backend.app.models.schemas import (
     ApiResponse,
     ScriptBreakdownRequest,
     ShotCreate,
+    ShotMergeNextRequest,
+    ShotPairMergeRequest,
     ShotReorderRequest,
     ShotRewriteRequest,
     ShotUpdate,
@@ -17,6 +19,8 @@ from backend.app.services.shotlist_service import (
     add_shots,
     delete_shot,
     list_shots,
+    merge_adjacent_shot_pairs,
+    merge_shot_with_next,
     patch_shot,
     reorder_shots,
     select_shot_version,
@@ -73,6 +77,32 @@ def reorder_project_shots(project_id: str, payload: ShotReorderRequest) -> ApiRe
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Shots reordered.", data=shots)
+
+
+@router.post("/{shot_id}/merge-next")
+def merge_project_shot_with_next(
+    project_id: str,
+    shot_id: str,
+    payload: ShotMergeNextRequest,
+) -> ApiResponse:
+    try:
+        result = merge_shot_with_next(project_id, shot_id, payload.next_shot_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(ok=True, message="Adjacent panels merged.", data=result)
+
+
+@router.post("/merge-pairs")
+def merge_project_shot_pairs(project_id: str, payload: ShotPairMergeRequest) -> ApiResponse:
+    try:
+        result = merge_adjacent_shot_pairs(project_id, payload.shot_ids)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(ok=True, message="Adjacent panel pairs merged.", data=result)
 
 
 @router.post("/{shot_id}/versions/{version_id}/select")

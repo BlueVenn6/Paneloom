@@ -112,6 +112,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ shot_ids: shotIds }),
     }),
+  mergeShotWithNext: (projectId, shotId, nextShotId) =>
+    request(`/projects/${projectId}/shots/${shotId}/merge-next`, {
+      method: "POST",
+      body: JSON.stringify({ next_shot_id: nextShotId }),
+    }),
+  mergeAdjacentShotPairs: (projectId, shotIds) =>
+    request(`/projects/${projectId}/shots/merge-pairs`, {
+      method: "POST",
+      body: JSON.stringify({ shot_ids: shotIds }),
+    }),
   selectShotVersion: (projectId, shotId, versionId) =>
     request(
       `/projects/${projectId}/shots/${shotId}/versions/${encodeURIComponent(versionId)}/select`,

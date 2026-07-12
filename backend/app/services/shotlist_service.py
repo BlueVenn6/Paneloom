@@ -311,6 +311,128 @@ def reorder_shots(project_id: str, shot_ids: list[str]) -> list[dict]:
     return next_shots
 
 
+def _merge_blocker(shot: dict) -> str:
+    if shot.get("locked") or shot.get("approval_status") == "approved":
+        return "Approved or locked panels cannot be merged."
+    if shot.get("status") == "generating":
+        return "A panel that is currently generating cannot be merged."
+    if (
+        shot.get("output_path")
+        or shot.get("output_url")
+        or shot.get("outputs")
+        or shot.get("versions")
+        or shot.get("selected_version_id")
+    ):
+        return "Panels with generated images or image versions cannot be merged."
+    return ""
+
+
+def _joined_text(first: str, second: str, separator: str) -> str:
+    values = [str(value).strip() for value in (first, second) if str(value or "").strip()]
+    return separator.join(dict.fromkeys(values))
+
+
+def _merged_shot(first: dict, second: dict) -> dict:
+    first_prompt = str(first.get("prompt") or "").strip()
+    second_prompt = str(second.get("prompt") or "").strip()
+    source_text = f"{first_prompt}{second_prompt}"
+    cjk = bool(re.search(r"[\u3400-\u9fff]", source_text))
+    prompt_separator = (
+        "\n\n合并为同一关键帧或漫画格的后续叙事节拍：\n"
+        if cjk
+        else "\n\nNext narrative beat in the same keyframe or comic panel:\n"
+    )
+    visual_separator = "；随后：" if cjk else "; then: "
+    notes_separator = "\n" if cjk else "\n"
+    merged_from = []
+    for shot in (first, second):
+        sources = shot.get("merged_from_shot_ids") or [shot.get("shot_id")]
+        merged_from.extend(str(item) for item in sources if item)
+    return {
+        **first,
+        "end_time": second.get("end_time") or first.get("end_time", ""),
+        "duration": min(
+            86_400,
+            float(first.get("duration") or 0) + float(second.get("duration") or 0),
+        ),
+        "visual_description": _joined_text(
+            first.get("visual_description", ""),
+            second.get("visual_description", ""),
+            visual_separator,
+        ),
+        "prompt": _joined_text(first_prompt, second_prompt, prompt_separator),
+        "negative_prompt": _joined_text(
+            first.get("negative_prompt", ""),
+            second.get("negative_prompt", ""),
+            ", ",
+        ),
+        "revision_notes": _joined_text(
+            first.get("revision_notes", ""),
+            second.get("revision_notes", ""),
+            notes_separator,
+        ),
+        "status": "pending",
+        "approval_status": "draft",
+        "locked": False,
+        "locked_at": "",
+        "output_path": "",
+        "output_url": "",
+        "outputs": [],
+        "versions": [],
+        "selected_version_id": "",
+        "download_error": "",
+        "generation_error": "",
+        "merged_from_shot_ids": list(dict.fromkeys(merged_from)),
+        "merged_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+
+
+def _renumber_standard_scene_ids(shots: list[dict]) -> None:
+    if not shots or not all(re.fullmatch(r"P\d+", str(shot.get("scene_id") or "")) for shot in shots):
+        return
+    width = max(3, len(str(len(shots))))
+    for index, shot in enumerate(shots, 1):
+        shot["scene_id"] = f"P{index:0{width}d}"
+
+
+@_synchronized
+def merge_shot_with_next(project_id: str, shot_id: str, next_shot_id: str) -> dict:
+    shots = _read_shots(project_id)
+    index = next((position for position, shot in enumerate(shots) if shot.get("shot_id") == shot_id), -1)
+    if index < 0:
+        raise FileNotFoundError(f"Shot not found: {shot_id}")
+    if index + 1 >= len(shots) or shots[index + 1].get("shot_id") != next_shot_id:
+        raise ValueError("Only two currently adjacent panels can be merged.")
+    first, second = shots[index], shots[index + 1]
+    blocker = _merge_blocker(first) or _merge_blocker(second)
+    if blocker:
+        raise ValueError(blocker)
+    next_shots = [*shots[:index], _merged_shot(first, second), *shots[index + 2 :]]
+    _renumber_standard_scene_ids(next_shots)
+    _write_shots(project_id, next_shots)
+    return {"merged_count": 1, "shots": next_shots}
+
+
+@_synchronized
+def merge_adjacent_shot_pairs(project_id: str, shot_ids: list[str]) -> dict:
+    shots = _read_shots(project_id)
+    current_ids = [str(shot.get("shot_id") or "") for shot in shots]
+    if current_ids != list(shot_ids):
+        raise ValueError("The storyboard changed. Reload it before merging adjacent pairs.")
+    pairs = [(shots[index], shots[index + 1]) for index in range(0, len(shots) - 1, 2)]
+    for first, second in pairs:
+        blocker = _merge_blocker(first) or _merge_blocker(second)
+        if blocker:
+            raise ValueError(blocker)
+    next_shots = [_merged_shot(first, second) for first, second in pairs]
+    if len(shots) % 2:
+        next_shots.append(shots[-1])
+    _renumber_standard_scene_ids(next_shots)
+    _write_shots(project_id, next_shots)
+    return {"merged_count": len(pairs), "shots": next_shots}
+
+
 @_synchronized
 def select_shot_version(project_id: str, shot_id: str, version_id: str) -> dict:
     shot = get_shot(project_id, shot_id)
