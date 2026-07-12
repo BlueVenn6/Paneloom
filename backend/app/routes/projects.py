@@ -317,6 +317,7 @@ def analyze_bible(project_id: str, payload: ProjectBibleAnalyzeRequest) -> ApiRe
             script=payload.script,
             use_ai=payload.use_ai,
             replace_existing=payload.replace_existing,
+            output_language=payload.output_language,
         )
         if result.get("ok") and isinstance(result.get("bible"), dict):
             result["bible"] = save_project_bible(project_id, result["bible"])

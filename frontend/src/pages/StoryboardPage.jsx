@@ -31,9 +31,11 @@ const defaultBible = {
   world_notes: "",
   prompt_prefix: "",
   style_analysis: "",
+  style_analysis_localized: {},
   style_reference_filename: "",
   visual_continuity_lock: "",
   visual_anchor_shot_id: "",
+  visual_anchor_reference_filename: "",
   visual_anchor_metrics: {},
   negative_prompt:
     "watermark, random text, speech bubble text, logo, distorted hands, bad anatomy",
@@ -291,6 +293,13 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     setReferenceJobProgress(null);
   }, [currentProject?.project_id]);
 
+  useEffect(() => {
+    const localized = bible.style_analysis_localized;
+    setStyleAnalysis(
+      localized && typeof localized === "object" ? localized[locale] || "" : "",
+    );
+  }, [bible.style_analysis_localized, locale]);
+
   function setShotProgressStage(shotId, stageKey, detail = "") {
     if (!shotId) return;
     setShotProgress((current) => ({
@@ -333,6 +342,12 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     if (!response) return fallback || t("unknownError");
     const data = response.data || {};
     if (data.error_code === "image_test_running") return t("generationBlockedByImageTest");
+    if (
+      data.error === "output_language_mismatch" ||
+      data.error_code === "output_language_mismatch"
+    ) {
+      return t("outputLanguageMismatch");
+    }
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean).join(" · ") : "";
     return (
       errors ||
@@ -454,7 +469,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     }
     const nextBible = { ...defaultBible, ...(bibleResponse.data || {}) };
     setBible(nextBible);
-    setStyleAnalysis(nextBible.style_analysis || "");
+    setStyleAnalysis(nextBible.style_analysis_localized?.[locale] || "");
     const nextReferences = referenceResponse.data || [];
     const nextAspects = aspectResponse.data || [];
     setReferences(nextReferences);
@@ -659,6 +674,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         visual_format: visualFormat,
         panel_gutter_style: panelGutterStyle,
         target_panel_count: Number(scriptForm.target_panel_count) || 8,
+        output_language: locale,
       });
       if (!response.ok) return response;
       const nextImportInfo = scriptImportInfo
@@ -691,6 +707,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         panel_gutter_style: panelGutterStyle,
         use_ai: scriptForm.use_ai,
         reset_outputs: true,
+        output_language: locale,
       });
       const source = response.data?.source === "ai" ? t("sourceAi") : t("sourceLocal");
       const warnings = response.data?.warnings || [];
@@ -810,6 +827,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         script: scriptForm.script,
         use_ai: true,
         replace_existing: scriptImportInfo?.bibleCurrent === false,
+        output_language: locale,
       });
       if (!response.ok) return response;
       if (response.data?.bible) {
@@ -857,6 +875,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
           script: scriptForm.script,
           use_ai: true,
           replace_existing: scriptImportInfo?.bibleCurrent === false,
+          output_language: locale,
         });
         if (!bibleResponse.ok) return bibleResponse;
         if (bibleResponse.data?.bible) {
@@ -883,6 +902,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
         script: scriptForm.script,
         categories,
         refinement_prompt: referenceRefinement,
+        output_language: locale,
       });
       if (!planResponse.ok) return planResponse;
       const nextPlan = Array.isArray(planResponse.data?.plan) ? planResponse.data.plan : [];
@@ -976,6 +996,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       const response = await api.analyzeReferenceStyle(currentProject.project_id, {
         reference_filename: reference.filename,
         apply_to_bible: true,
+        output_language: locale,
       });
       if (response.data?.style_prompt) {
         updateGlobalStyle(response.data.style_prompt);
@@ -994,7 +1015,9 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     if (!currentProject || !shot?.shot_id || !shot.output_url) return;
     if (!window.confirm(t("visualAnchorConfirm"))) return;
     await run(`visual-anchor-${shot.shot_id}`, async () => {
-      const response = await api.setShotVisualAnchor(currentProject.project_id, shot.shot_id);
+      const response = await api.setShotVisualAnchor(currentProject.project_id, shot.shot_id, {
+        output_language: locale,
+      });
       if (response.data?.bible) {
         const nextBible = { ...defaultBible, ...response.data.bible };
         setBible(nextBible);
@@ -2201,6 +2224,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
             </div>
             <p className="muted">{t("projectAssetsHint")}</p>
             <p className="muted">{t("referenceHint")}</p>
+            <p className="muted">{t("referencePixelNotice")}</p>
+            <p className="muted">{t("styleExtractionScope")}</p>
             <input
               accept="image/png,image/jpeg,image/webp"
               multiple

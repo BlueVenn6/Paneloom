@@ -22,6 +22,11 @@ from backend.app.config import (
 from backend.app.models.schemas import ImageGenerationRequest
 from backend.app.security import redact_sensitive_value
 from backend.app.services.aspect_service import resolve_generation_sizes
+from backend.app.services.language_service import (
+    is_output_language_compatible,
+    normalize_output_language,
+    output_language_name,
+)
 from backend.app.services.project_service import (
     get_project_bible,
     get_project_dir,
@@ -186,30 +191,36 @@ def _reference_paths(project_id: str, filenames: list[str] | None) -> list[Path]
     return paths
 
 
-def _direct_reference_prompt_note(reference_paths: list[Path]) -> str:
+def _direct_reference_prompt_note(project_id: str, reference_paths: list[Path]) -> str:
     if not reference_paths:
         return ""
-    names = ", ".join(path.stem for path in reference_paths)
-    role_notes: list[str] = []
+    metadata = _read_reference_metadata(project_id)
+    identity_notes: list[str] = []
     for path in reference_paths:
-        stem = path.stem.lower()
-        if "character" in stem or "角色" in stem:
-            role_notes.append("treat it as the core character sheet")
-        elif "prop" in stem or "道具" in stem:
-            role_notes.append("treat it as the core prop reference")
-        elif "scene" in stem or "location" in stem or "场景" in stem:
-            role_notes.append("treat it as the core location reference")
-        elif "style" in stem or "风格" in stem:
-            role_notes.append("treat it as the core style reference")
-    role_text = "; ".join(dict.fromkeys(role_notes))
-    if role_text:
-        role_text = f" ({role_text})"
+        item = metadata.get(path.name, {}) if isinstance(metadata.get(path.name), dict) else {}
+        category = str(item.get("category") or _reference_category_from_filename(path.name) or "reference")
+        if category == "style" or path.name.startswith("visual-anchor-"):
+            continue
+        description = " | ".join(
+            value
+            for value in [
+                str(item.get("name") or path.stem).strip(),
+                str(item.get("purpose") or "").strip(),
+                str(item.get("image_prompt") or "").strip(),
+            ]
+            if value
+        )
+        identity_notes.append(f"{category}: {description}")
+    if not identity_notes:
+        return ""
     return (
-        "DIRECT GENERATION REFERENCE LOCK: Selected project reference asset names: "
-        f"{names}{role_text}. The direct generation endpoint does not receive image pixels, "
-        "so follow these references through textual continuity: consistent protagonist face shape, "
-        "hair silhouette, clothing logic, recurring props, style anchors, palette logic, "
-        "line quality, and storyboard panel composition. Obey the current STYLE LOCK above."
+        "CONTENT IDENTITY LOCK ONLY: The /images/generations endpoint does not receive reference image pixels. "
+        "Use only these cached text descriptions to preserve character identity, face/hair silhouette, costume design, "
+        "recurring props, and location identity: "
+        f"{' ; '.join(identity_notes)}. "
+        "Never copy a reference sheet's grid, collage, turnaround layout, border, gutter, margin, background, "
+        "exposure, lighting, or framing. Content assets have no authority over panel layout or final-image styling. "
+        "Only the project STYLE LOCK, VISUAL MASTER LOCK, and PANEL SEPARATION LOCK control those properties."
     )
 
 
@@ -671,7 +682,7 @@ def _generate_shot_image_locked(
         output_path = output_dir / filename
         size_prompt = f"{prompt}\n\n{_target_aspect_note(size_item)}"
         provider_size = size_item.get("generation_size") or size_item["size"]
-        direct_reference_note = _direct_reference_prompt_note(reference_paths)
+        direct_reference_note = _direct_reference_prompt_note(project_id, reference_paths)
         if direct_reference_note:
             size_prompt = f"{size_prompt}\n\n{direct_reference_note}"
         result = _bounded_generate_image(
@@ -988,6 +999,17 @@ def delete_reference_image(project_id: str, filename: str) -> dict:
             {
                 **bible,
                 "style_reference_filename": "",
+                "style_analysis": "",
+                "style_analysis_localized": {},
+            },
+        )
+        bible = get_project_bible(project_id)
+    if bible.get("visual_anchor_reference_filename") == safe_name:
+        save_project_bible(
+            project_id,
+            {
+                **bible,
+                "visual_anchor_reference_filename": "",
                 "visual_continuity_lock": "",
                 "visual_anchor_shot_id": "",
                 "visual_anchor_metrics": {},
@@ -1053,7 +1075,7 @@ def _record_reference_metadata(project_id: str, references: list[dict]) -> None:
     for reference in references:
         metadata[reference["filename"]] = {
             key: reference.get(key, "")
-            for key in ("category", "name", "purpose", "asset_id")
+            for key in ("category", "name", "purpose", "asset_id", "image_prompt")
             if reference.get(key)
         }
     _write_reference_metadata(project_id, metadata)
@@ -1143,6 +1165,45 @@ def _local_style_analysis_prompt(metrics: dict) -> str:
     )
 
 
+def _localized_style_analysis(metrics: dict, locale: str, *, ai_unavailable: bool = False) -> str:
+    values = {
+        "rgb": metrics.get("average_rgb"),
+        "brightness": metrics.get("brightness"),
+        "contrast": metrics.get("contrast"),
+        "saturation": metrics.get("saturation"),
+        "edge": metrics.get("edge_density"),
+    }
+    if locale == "zh-TW":
+        prefix = "AI 視覺分析不可用，以下為本機量測結果。" if ai_unavailable else "本機視覺量測"
+        return (
+            f"{prefix}\n平均色彩 RGB：{values['rgb']}\n亮度：{values['brightness']}\n"
+            f"對比度：{values['contrast']}\n飽和度：{values['saturation']}\n線條密度：{values['edge']}"
+        )
+    if locale == "zh-CN":
+        prefix = "AI 视觉分析不可用，以下为本地测量结果。" if ai_unavailable else "本地视觉测量"
+        return (
+            f"{prefix}\n平均色彩 RGB：{values['rgb']}\n亮度：{values['brightness']}\n"
+            f"对比度：{values['contrast']}\n饱和度：{values['saturation']}\n线条密度：{values['edge']}"
+        )
+    if locale == "ja":
+        prefix = "AI 視覚分析を利用できないため、ローカル計測値を表示します。" if ai_unavailable else "ローカル視覚計測"
+        return (
+            f"{prefix}\n平均色 RGB：{values['rgb']}\n明るさ：{values['brightness']}\n"
+            f"コントラスト：{values['contrast']}\n彩度：{values['saturation']}\n線密度：{values['edge']}"
+        )
+    if locale == "ko":
+        prefix = "AI 시각 분석을 사용할 수 없어 로컬 측정값을 표시합니다." if ai_unavailable else "로컬 시각 측정"
+        return (
+            f"{prefix}\n평균 색상 RGB: {values['rgb']}\n밝기: {values['brightness']}\n"
+            f"대비: {values['contrast']}\n채도: {values['saturation']}\n선 밀도: {values['edge']}"
+        )
+    prefix = "AI vision analysis was unavailable; local measurements are shown." if ai_unavailable else "Local visual measurements"
+    return (
+        f"{prefix}\nAverage RGB: {values['rgb']}\nBrightness: {values['brightness']}\n"
+        f"Contrast: {values['contrast']}\nSaturation: {values['saturation']}\nEdge density: {values['edge']}"
+    )
+
+
 def _parse_style_json(text: str) -> dict | None:
     text = text.strip()
     if not text:
@@ -1162,6 +1223,7 @@ def analyze_reference_style(
     reference_filename: str,
     apply_to_bible: bool = True,
     as_visual_anchor: bool = False,
+    output_language: str = "source",
 ) -> dict:
     require_project(project_id)
     reference_path = get_project_reference_dir(project_id) / Path(reference_filename).name
@@ -1170,6 +1232,8 @@ def analyze_reference_style(
 
     metrics = _image_style_metrics(reference_path)
     local_analysis = _local_style_analysis_prompt(metrics)
+    locale = normalize_output_language(output_language)
+    language_name = output_language_name(locale)
     if is_offline_mode():
         ai_result = {"ok": False, "error": "offline_mode"}
     else:
@@ -1177,21 +1241,33 @@ def analyze_reference_style(
         text_config = get_text_api_config(settings)
         image_b64 = base64.b64encode(reference_path.read_bytes()).decode("ascii")
         mime_type = mimetypes.guess_type(reference_path.name)[0] or "image/png"
+        layout_instruction = (
+            "This is a finished storyboard visual master. Analyze its exposure, color temperature, rendering density, "
+            "composition, border color, border thickness relative to a 1024px canvas, gutter width, and framed/seamless layout. "
+            if as_visual_anchor
+            else "This is a content/reference asset, not a finished storyboard layout. Ignore and do not describe its sheet grid, "
+            "collage, turnaround arrangement, panel borders, gutters, margins, background, exposure, or framing. Extract only "
+            "brushwork, linework, palette, texture, and rendering technique; set all border/gutter fields to empty strings. "
+        )
         ai_result = generate_text_with_image(
             text_config,
             system_prompt=(
                 "You are a production art director extracting a reusable style guide from a user-owned reference image. "
-                "Do not identify or imitate living artists or copyrighted franchises. Extract visual rules only."
+                "Do not identify or imitate living artists or copyrighted franchises. Extract visual rules only. "
+                "Keep machine-facing prompt fields in English and write display_analysis only in the requested display language."
             ),
             user_prompt=(
                 "Analyze this reference image as a reusable custom visual style for storyboard image generation. "
                 "Return only JSON with keys: style_prompt, brushwork, linework, color_palette, value_structure, "
                 "composition, texture, exposure_target, color_temperature, rendering_density, "
                 "panel_border_color, panel_border_thickness, gutter_color, gutter_width, "
-                "typography_or_symbol_logic, do_rules, avoid_rules. "
+                "typography_or_symbol_logic, do_rules, avoid_rules, display_analysis. "
                 "style_prompt must be one concise English prompt under 900 characters, strict enough to apply to new images. "
-                "Describe border thickness relative to a 1024px canvas and explicitly state whether the image is framed or seamless. "
-                f"Local measured image metrics: {json.dumps(metrics, ensure_ascii=False)}"
+                "brushwork through avoid_rules are machine-facing and must be English. "
+                f"display_analysis must be a clear production guide under 1600 characters written only in {language_name}. "
+                + layout_instruction
+                + " "
+                + f"Local measured image metrics: {json.dumps(metrics, ensure_ascii=False)}"
             ),
             image_b64=image_b64,
             mime_type=mime_type,
@@ -1200,37 +1276,27 @@ def analyze_reference_style(
     parsed = _parse_style_json(ai_result.get("text", "")) if ai_result.get("ok") else None
     if parsed and parsed.get("style_prompt"):
         style_prompt = str(parsed.get("style_prompt", "")).strip()
-        analysis_parts = [
-            f"Brushwork: {parsed.get('brushwork', '')}",
-            f"Linework: {parsed.get('linework', '')}",
-            f"Color palette: {parsed.get('color_palette', '')}",
-            f"Value structure: {parsed.get('value_structure', '')}",
-            f"Composition: {parsed.get('composition', '')}",
-            f"Texture: {parsed.get('texture', '')}",
-            f"Exposure target: {parsed.get('exposure_target', '')}",
-            f"Color temperature: {parsed.get('color_temperature', '')}",
-            f"Rendering density: {parsed.get('rendering_density', '')}",
-            f"Panel border: {parsed.get('panel_border_color', '')}; {parsed.get('panel_border_thickness', '')}",
-            f"Gutter: {parsed.get('gutter_color', '')}; {parsed.get('gutter_width', '')}",
-            f"Typography/symbol logic: {parsed.get('typography_or_symbol_logic', '')}",
-            f"Do: {parsed.get('do_rules', '')}",
-            f"Avoid: {parsed.get('avoid_rules', '')}",
-            f"Measured metrics: {local_analysis}",
-        ]
         source = "ai_vision"
     else:
         style_prompt = local_analysis
-        analysis_parts = [
-            "AI vision analysis was unavailable or did not return parseable JSON.",
-            f"Measured style extraction: {local_analysis}",
-        ]
         source = "local_metrics"
 
-    style_lock = (
-        "custom reference-derived style, "
-        f"{style_prompt} Strictly preserve brushwork, color structure, value rhythm, texture, "
-        "line quality, and composition logic from the selected reference; do not copy exact content."
+    display_analysis = (
+        str(parsed.get("display_analysis") or "").strip()
+        if parsed
+        else ""
     )
+    if not is_output_language_compatible(display_analysis, locale):
+        display_analysis = _localized_style_analysis(metrics, locale, ai_unavailable=True)
+
+    style_scope = (
+        "Strictly preserve brushwork, color structure, value rhythm, texture, line quality, and composition logic "
+        "from this finished visual master; do not copy exact story content."
+        if as_visual_anchor
+        else "Preserve only brushwork, palette behavior, texture, and line quality. Ignore the reference asset's "
+        "sheet layout, collage, grid, borders, gutters, margins, exposure, lighting, framing, and background."
+    )
+    style_lock = f"custom reference-derived style, {style_prompt} {style_scope}"
     if parsed:
         continuity_lock = " ".join(
             part
@@ -1251,11 +1317,20 @@ def analyze_reference_style(
             "Use one unchanged project-wide line-weight system and one unchanged framed/seamless panel system."
         )
     bible = get_project_bible(project_id)
+    localized_analyses = bible.get("style_analysis_localized")
+    if not isinstance(localized_analyses, dict):
+        localized_analyses = {}
+    localized_analyses = {**localized_analyses, locale: display_analysis}
     next_bible = {
         **bible,
         "visual_style": style_lock,
-        "style_analysis": "\n".join(part for part in analysis_parts if part.strip()),
-        "style_reference_filename": reference_path.name,
+        "style_analysis": display_analysis,
+        "style_analysis_localized": localized_analyses,
+        **(
+            {"visual_anchor_reference_filename": reference_path.name}
+            if as_visual_anchor
+            else {"style_reference_filename": reference_path.name}
+        ),
         **(
             {
                 "visual_continuity_lock": continuity_lock,
@@ -1277,7 +1352,9 @@ def analyze_reference_style(
         "source": source,
         "applied": apply_to_bible,
         "style_prompt": style_lock,
-        "style_analysis": next_bible["style_analysis"],
+        "style_analysis": display_analysis,
+        "style_analysis_locale": locale,
+        "style_analysis_localized": localized_analyses,
         "visual_continuity_lock": continuity_lock,
         "metrics": metrics,
         "ai_error": "" if ai_result.get("ok") else ai_result.get("error", ""),
@@ -1285,7 +1362,7 @@ def analyze_reference_style(
     }
 
 
-def set_shot_visual_anchor(project_id: str, shot_id: str) -> dict:
+def set_shot_visual_anchor(project_id: str, shot_id: str, output_language: str = "source") -> dict:
     require_project(project_id)
     shot = get_shot(project_id, shot_id)
     if not shot:
@@ -1298,7 +1375,7 @@ def set_shot_visual_anchor(project_id: str, shot_id: str) -> dict:
         raise FileNotFoundError("The selected panel image is missing from local storage.")
 
     previous_bible = get_project_bible(project_id)
-    previous_anchor = str(previous_bible.get("style_reference_filename") or "")
+    previous_anchor = str(previous_bible.get("visual_anchor_reference_filename") or "")
     reference = save_reference_image(
         project_id,
         f"visual-anchor-{shot_id}{source_path.suffix or '.png'}",
@@ -1309,6 +1386,7 @@ def set_shot_visual_anchor(project_id: str, shot_id: str) -> dict:
         reference_filename=reference["filename"],
         apply_to_bible=True,
         as_visual_anchor=True,
+        output_language=output_language,
     )
     next_bible = {
         **get_project_bible(project_id),
@@ -1335,6 +1413,7 @@ def plan_reference_assets(
     script: str = "",
     categories: list[str] | None = None,
     refinement_prompt: str = "",
+    output_language: str = "source",
 ) -> dict:
     require_project(project_id)
     if is_offline_mode():
@@ -1345,19 +1424,21 @@ def plan_reference_assets(
         return {"ok": False, "error": "configuration_error", "error_message": " ".join(errors), "plan": []}
     bible = get_project_bible(project_id)
     requested = categories or ["main_characters", "supporting_characters", "locations", "props"]
+    language_name = output_language_name(output_language, script)
     response = generate_text(
         get_text_api_config(settings),
         system_prompt=(
             "You are a production asset planner for manga and animation. Return only valid JSON with an assets array. "
             "Each asset must have asset_id, category, name, purpose, image_prompt. Allowed categories: "
             "character_turnaround, character_expression_action, supporting_character, location, prop, style. "
-            "Display name and purpose in the source script language. image_prompt may be English."
+            f"Display name and purpose only in {language_name}. image_prompt must be English."
         ),
         user_prompt=(
             f"Requested groups: {json.dumps(requested, ensure_ascii=False)}\n"
             f"Project bible: {json.dumps(bible, ensure_ascii=False)}\n"
             f"Script: {script[:12000]}\n"
             f"User refinement: {refinement_prompt}\n\n"
+            f"Required display language for name and purpose: {language_name}.\n"
             "Choose only assets that materially improve visual continuity, with 1 to 8 images total. "
             "For each core named character, normally plan a clean turnaround/model sheet and, when useful, a separate expression/action sheet. "
             "Plan important locations as clean reusable environment references and recurring props as isolated object references. "
@@ -1395,13 +1476,26 @@ def plan_reference_assets(
     for group in requested:
         requested_allowed.update(request_map.get(group, set()))
     plan: list[dict] = []
+    language_mismatch_count = 0
     for index, item in enumerate(raw_assets if isinstance(raw_assets, list) else [], 1):
         if not isinstance(item, dict):
             continue
         category = str(item.get("category") or "").strip()
         name = str(item.get("name") or "").strip()
+        purpose = str(item.get("purpose") or "").strip()
         prompt = str(item.get("image_prompt") or "").strip()
-        if category not in allowed or category not in requested_allowed or not name or not prompt:
+        display_text = " ".join(value for value in (name, purpose) if value)
+        locale = normalize_output_language(output_language, script)
+        language_matches = is_output_language_compatible(display_text, locale)
+        if not language_matches:
+            language_mismatch_count += 1
+        if (
+            category not in allowed
+            or category not in requested_allowed
+            or not name
+            or not prompt
+            or not language_matches
+        ):
             continue
         asset_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(item.get("asset_id") or f"asset-{index}")).strip("-")
         plan.append(
@@ -1409,14 +1503,24 @@ def plan_reference_assets(
                 "asset_id": (asset_id or f"asset-{index}")[:80],
                 "category": category,
                 "name": name[:120],
-                "purpose": str(item.get("purpose") or "").strip()[:500],
+                "purpose": purpose[:500],
                 "image_prompt": prompt[:5000],
             }
         )
         if len(plan) >= 8:
             break
     if not plan:
-        return {"ok": False, "error": "invalid_asset_plan", "error_message": "Text model did not return a usable asset plan.", "plan": []}
+        error = "output_language_mismatch" if language_mismatch_count else "invalid_asset_plan"
+        return {
+            "ok": False,
+            "error": error,
+            "error_message": (
+                "Text model output did not match the selected interface language."
+                if language_mismatch_count
+                else "Text model did not return a usable asset plan."
+            ),
+            "plan": [],
+        }
     return {
         "ok": True,
         "source": "ai",
@@ -1487,6 +1591,7 @@ def generate_reference_concepts(
                     "name": (plan_item or {}).get("name", category),
                     "purpose": (plan_item or {}).get("purpose", ""),
                     "asset_id": (plan_item or {}).get("asset_id", asset_id),
+                    "image_prompt": (plan_item or {}).get("image_prompt", prompt),
                 },
                 "",
             )

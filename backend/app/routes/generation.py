@@ -11,6 +11,7 @@ from backend.app.models.schemas import (
     ReferenceAssetPlanRequest,
     ReferenceConceptRequest,
     ReferenceStyleAnalysisRequest,
+    VisualAnchorRequest,
 )
 from backend.app.services.aspect_service import get_aspect_presets
 from backend.app.services.image_service import (
@@ -168,6 +169,7 @@ def _run_reference_job(job_id: str, project_id: str, payload: ReferenceConceptRe
             script=payload.script,
             categories=payload.categories,
             refinement_prompt=payload.refinement_prompt,
+            output_language=payload.output_language,
             plan=[item.model_dump() for item in payload.plan],
             progress_callback=report_progress,
         )
@@ -374,6 +376,7 @@ def analyze_reference_image_style(
             project_id,
             reference_filename=payload.reference_filename,
             apply_to_bible=payload.apply_to_bible,
+            output_language=payload.output_language,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -381,9 +384,17 @@ def analyze_reference_image_style(
 
 
 @router.post("/{shot_id}/visual-anchor")
-def set_project_visual_anchor(project_id: str, shot_id: str) -> ApiResponse:
+def set_project_visual_anchor(
+    project_id: str,
+    shot_id: str,
+    payload: VisualAnchorRequest | None = None,
+) -> ApiResponse:
     try:
-        result = set_shot_visual_anchor(project_id, shot_id)
+        result = set_shot_visual_anchor(
+            project_id,
+            shot_id,
+            output_language=payload.output_language if payload else "source",
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

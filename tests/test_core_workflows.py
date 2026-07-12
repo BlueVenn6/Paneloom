@@ -23,6 +23,7 @@ from backend.app.models.schemas import (
     ProjectWorkspacePayload,
     ProjectActivityHeartbeat,
     ImageGenerationRequest,
+    ScriptBreakdownRequest,
     ReviewRequest,
     SchedulePlanRequest,
     SettingsPayload,
@@ -38,6 +39,7 @@ from backend.app.services import (
     export_service,
     bible_analysis_service,
     image_service,
+    planning_service,
     project_service,
     story_optimization_service,
 )
@@ -818,7 +820,8 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertIn("Hero wears a red coat", observed["prompt"])
         self.assertIn("Rainy station platform", observed["prompt"])
         self.assertIn(reference["filename"].rsplit(".", 1)[0], observed["prompt"])
-        self.assertIn("direct generation endpoint does not receive image pixels", observed["prompt"])
+        self.assertIn("does not receive reference image pixels", observed["prompt"])
+        self.assertIn("Content assets have no authority over panel layout", observed["prompt"])
 
     def test_generated_panel_becomes_offline_visual_master_and_locks_later_prompts(self):
         project = self.create_project("Visual master")
@@ -849,9 +852,32 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertTrue(bible["visual_anchor_metrics"])
         self.assertIn("Measured master-image rendering baseline", bible["visual_continuity_lock"])
         self.assertTrue((project_service.get_project_reference_dir(project_id) / result["reference"]["filename"]).is_file())
+        self.assertEqual(
+            bible["visual_anchor_reference_filename"],
+            result["reference"]["filename"],
+        )
         locked_prompt, _ = apply_bible_to_shot_prompt(shot, bible)
         self.assertIn("VISUAL MASTER LOCK", locked_prompt)
         self.assertIn("panel-border thickness", locked_prompt)
+
+        style_path = project_service.get_project_reference_dir(project_id) / "rendering-style.png"
+        Image.new("RGB", (96, 96), color=(80, 100, 120)).save(style_path)
+        with patch.object(image_service, "is_offline_mode", return_value=True):
+            image_service.analyze_reference_style(
+                project_id,
+                style_path.name,
+                output_language="zh-CN",
+            )
+        separated = project_service.get_project_bible(project_id)
+        self.assertEqual(separated["style_reference_filename"], style_path.name)
+        self.assertEqual(
+            separated["visual_anchor_reference_filename"],
+            result["reference"]["filename"],
+        )
+        image_service.delete_reference_image(project_id, style_path.name)
+        anchor_preserved = project_service.get_project_bible(project_id)
+        self.assertEqual(anchor_preserved["visual_anchor_shot_id"], shot["shot_id"])
+        self.assertTrue(anchor_preserved["visual_anchor_metrics"])
 
         image_service.delete_reference_image(project_id, result["reference"]["filename"])
         cleared = project_service.get_project_bible(project_id)
@@ -888,6 +914,151 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertTrue(result["visual_anchor_adjusted"])
         self.assertGreater(result["visual_metrics_after"]["brightness"], before["brightness"])
         self.assertEqual(result["visual_anchor_shot_id"], "shot-master")
+
+    def test_style_analysis_separates_localized_display_from_machine_prompt_and_layout(self):
+        project = self.create_project("Localized style")
+        buffer = io.BytesIO()
+        Image.new("RGB", (96, 96), color=(120, 80, 50)).save(buffer, format="PNG")
+        reference = image_service.save_reference_image(
+            project["project_id"],
+            "character-model-sheet.png",
+            buffer.getvalue(),
+        )
+        provider_text = json.dumps(
+            {
+                "style_prompt": "dry ink and muted earthen pigments",
+                "brushwork": "dry ink",
+                "linework": "rough contour",
+                "color_palette": "muted earth colors",
+                "value_structure": "moderate contrast",
+                "composition": "",
+                "texture": "paper grain",
+                "exposure_target": "",
+                "color_temperature": "",
+                "rendering_density": "medium",
+                "panel_border_color": "",
+                "panel_border_thickness": "",
+                "gutter_color": "",
+                "gutter_width": "",
+                "typography_or_symbol_logic": "none",
+                "do_rules": "preserve dry ink",
+                "avoid_rules": "avoid glossy rendering",
+                "display_analysis": "笔触：干燥墨线。色彩：低饱和土色。版式和边框已忽略。",
+            },
+            ensure_ascii=False,
+        )
+        with (
+            patch.object(image_service, "is_offline_mode", return_value=False),
+            patch.object(image_service, "get_active_settings", return_value={}),
+            patch.object(image_service, "get_text_api_config", return_value={}),
+            patch.object(
+                image_service,
+                "generate_text_with_image",
+                return_value={"ok": True, "text": provider_text},
+            ) as provider,
+        ):
+            result = image_service.analyze_reference_style(
+                project["project_id"],
+                reference["filename"],
+                output_language="zh-CN",
+            )
+
+        request_prompt = provider.call_args.kwargs["user_prompt"]
+        self.assertIn("Simplified Chinese", request_prompt)
+        self.assertIn("content/reference asset", request_prompt)
+        self.assertIn("set all border/gutter fields to empty strings", request_prompt)
+        self.assertEqual(result["style_analysis_locale"], "zh-CN")
+        self.assertEqual(result["style_analysis"], "笔触：干燥墨线。色彩：低饱和土色。版式和边框已忽略。")
+        self.assertIn("Ignore the reference asset's sheet layout", result["style_prompt"])
+        bible = project_service.get_project_bible(project["project_id"])
+        self.assertEqual(bible["style_analysis_localized"]["zh-CN"], result["style_analysis"])
+
+    def test_content_reference_text_lock_cannot_control_panel_layout(self):
+        project = self.create_project("Reference authority")
+        project_id = project["project_id"]
+        reference_dir = project_service.get_project_reference_dir(project_id)
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        character_path = reference_dir / "project-reference-main_characters-hero.png"
+        style_path = reference_dir / "project-reference-style-look.png"
+        Image.new("RGB", (32, 32), color=(90, 40, 30)).save(character_path)
+        Image.new("RGB", (32, 32), color=(30, 40, 90)).save(style_path)
+        image_service._write_reference_metadata(
+            project_id,
+            {
+                character_path.name: {
+                    "category": "character_turnaround",
+                    "name": "红衣主角",
+                    "purpose": "固定脸型、短发和红色外套",
+                    "image_prompt": "character turnaround sheet with a four-cell grid",
+                },
+                style_path.name: {"category": "style", "name": "风格参考"},
+            },
+        )
+
+        note = image_service._direct_reference_prompt_note(
+            project_id,
+            [character_path, style_path],
+        )
+
+        self.assertIn("红衣主角", note)
+        self.assertIn("does not receive reference image pixels", note)
+        self.assertIn("Never copy a reference sheet's grid", note)
+        self.assertIn("Content assets have no authority over panel layout", note)
+        self.assertNotIn("风格参考", note)
+
+    def test_storyboard_ai_request_requires_selected_ui_language(self):
+        payload = ScriptBreakdownRequest(
+            script="一个女孩在雨夜车站等待。",
+            target_panel_count=1,
+            output_language="zh-CN",
+        )
+        provider_text = json.dumps(
+            {
+                "shots": [
+                    {
+                        "scene_id": "P001",
+                        "visual_description": "女孩站在雨夜车站。",
+                        "prompt": "女孩撑红伞等待列车。",
+                        "negative_prompt": "不要文字。",
+                        "revision_notes": "保持红伞一致。",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        with patch.object(
+            planning_service,
+            "generate_text",
+            return_value={"ok": True, "text": provider_text},
+        ) as provider:
+            result = planning_service._breakdown_with_ai({}, payload)
+
+        self.assertIn("Required output language: Simplified Chinese", provider.call_args.kwargs["user_prompt"])
+        self.assertTrue(result["shots"][0].prompt.startswith("漫画分镜第 1/1 格"))
+        self.assertNotIn("Panel 1 of 1", result["shots"][0].prompt)
+
+        english_provider_text = json.dumps(
+            {
+                "shots": [
+                    {
+                        "scene_id": "P001",
+                        "visual_description": "A girl waits at a rainy station.",
+                        "prompt": "A girl holds a red umbrella.",
+                        "negative_prompt": "No text.",
+                        "revision_notes": "Keep the umbrella consistent.",
+                    }
+                ]
+            }
+        )
+        with patch.object(
+            planning_service,
+            "generate_text",
+            return_value={"ok": True, "text": english_provider_text},
+        ):
+            mismatch = planning_service._breakdown_with_ai({}, payload)
+        self.assertEqual(mismatch["shots"], [])
+        self.assertEqual(mismatch["error"], "output_language_mismatch")
+        self.assertIn("language", mismatch["warnings"][0])
 
     def test_duplicate_shot_generation_reuses_the_active_job(self):
         project = self.create_project("Duplicate generation")
@@ -950,10 +1121,11 @@ class StoryOptimizationTests(unittest.TestCase):
         result = self._run_with_response(
             json.dumps(
                 {
-                    "logline": "Changed",
-                    "improved_script": "A genuinely revised story",
-                    "risks": [{"risk": "Visual drift", "solution": "Lock references"}],
-                }
+                    "logline": "真正改写后的故事",
+                    "improved_script": "这是一个经过结构调整且内容明显不同的故事。",
+                    "risks": [{"risk": "视觉漂移", "solution": "锁定参考资产"}],
+                },
+                ensure_ascii=False,
             )
         )
         self.assertTrue(result["ok"])
@@ -961,8 +1133,21 @@ class StoryOptimizationTests(unittest.TestCase):
         self.assertEqual(result["model"], "test-model")
         self.assertEqual(result["output_language"], "zh-CN")
         self.assertEqual(result["storyboard_strategy"], [])
-        self.assertEqual(result["risks"], [{"risk": "Visual drift", "solution": "Lock references"}])
+        self.assertEqual(result["risks"], [{"risk": "视觉漂移", "solution": "锁定参考资产"}])
         self.assertTrue(result["input_sha256"])
+
+    def test_real_ai_result_rejects_wrong_output_language(self):
+        result = self._run_with_response(
+            json.dumps(
+                {
+                    "logline": "Changed",
+                    "improved_script": "A genuinely revised story",
+                    "risks": [{"risk": "Visual drift", "solution": "Lock references"}],
+                }
+            )
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "output_language_mismatch")
 
 
 class ImageClientBoundaryTests(unittest.TestCase):

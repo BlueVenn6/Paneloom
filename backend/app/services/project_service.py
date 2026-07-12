@@ -527,9 +527,11 @@ def _default_project_bible() -> dict:
         "world_notes": "",
         "prompt_prefix": "",
         "style_analysis": "",
+        "style_analysis_localized": {},
         "style_reference_filename": "",
         "visual_continuity_lock": "",
         "visual_anchor_shot_id": "",
+        "visual_anchor_reference_filename": "",
         "visual_anchor_metrics": {},
         "negative_prompt": (
             "watermark, random text, speech bubble text, logo, distorted hands, "

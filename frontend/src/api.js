@@ -165,9 +165,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  setShotVisualAnchor: (projectId, shotId) =>
+  setShotVisualAnchor: (projectId, shotId, payload = {}) =>
     request(`/projects/${projectId}/generate/${shotId}/visual-anchor`, {
       method: "POST",
+      body: JSON.stringify(payload),
     }),
   importDocument: (file) => {
     const body = new FormData();

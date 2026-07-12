@@ -128,6 +128,7 @@ class ShotRewriteRequest(BaseModel):
     panel_gutter_style: Literal["framed", "seamless"] = "framed"
     use_ai: bool = True
     reset_outputs: bool = True
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
 
 
 class BatchGenerateRequest(BaseModel):
@@ -149,9 +150,11 @@ class ProjectBiblePayload(BaseModel):
     prompt_prefix: str = ""
     negative_prompt: str = ""
     style_analysis: str = ""
+    style_analysis_localized: dict[str, str] = Field(default_factory=dict)
     style_reference_filename: str = ""
     visual_continuity_lock: str = ""
     visual_anchor_shot_id: str = ""
+    visual_anchor_reference_filename: str = ""
     visual_anchor_metrics: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -159,6 +162,7 @@ class ProjectBibleAnalyzeRequest(BaseModel):
     script: str = ""
     use_ai: bool = True
     replace_existing: bool = False
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
 
 
 class ExportRequest(BaseModel):
@@ -241,6 +245,7 @@ class ScriptBreakdownRequest(BaseModel):
     target_panel_count: int = Field(default=8, ge=1, le=80)
     include_dialogue: bool = True
     use_ai: bool = True
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
 
 
 class StoryOptimizationRequest(BaseModel):
@@ -317,11 +322,17 @@ class ReferenceAssetPlanRequest(BaseModel):
         Literal["main_characters", "supporting_characters", "locations", "props", "style"]
     ] = Field(default_factory=list)
     refinement_prompt: str = ""
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
 
 
 class ReferenceStyleAnalysisRequest(BaseModel):
     reference_filename: str = Field(..., min_length=1)
     apply_to_bible: bool = True
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
+
+
+class VisualAnchorRequest(BaseModel):
+    output_language: Literal["zh-CN", "zh-TW", "en", "ja", "ko", "source"] = "source"
 
 
 class ImageGenerationResult(BaseModel):

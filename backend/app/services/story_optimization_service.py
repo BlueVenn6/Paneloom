@@ -14,6 +14,7 @@ from backend.app.config import (
     validate_text_settings,
 )
 from backend.app.models.schemas import StoryOptimizationRequest
+from backend.app.services.language_service import is_output_language_compatible, normalize_output_language
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
@@ -90,6 +91,20 @@ opening hook, scene beats, image-generation risks, and suitable platforms.
         return _ai_failure(
             "unchanged_model_output",
             "Text model returned the original script without an actual optimization.",
+        )
+    locale = normalize_output_language(payload.output_language, payload.script)
+    user_visible = " ".join(
+        [
+            improved_script,
+            str(parsed.get("logline") or ""),
+            json.dumps(parsed.get("revision_suggestions") or [], ensure_ascii=False),
+            json.dumps(parsed.get("risks") or [], ensure_ascii=False),
+        ]
+    )
+    if not is_output_language_compatible(user_visible, locale):
+        return _ai_failure(
+            "output_language_mismatch",
+            "Text model output did not match the selected interface language.",
         )
     result = _normalize_result(parsed, payload, source="ai", warnings=[])
     result.update(

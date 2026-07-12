@@ -6,6 +6,11 @@ from typing import Any
 
 from backend.app.config import get_active_settings, get_text_api_config, is_offline_mode, validate_text_settings
 from backend.app.models.schemas import ScriptBreakdownRequest, ShotCreate, ShotRewriteRequest
+from backend.app.services.language_service import (
+    is_output_language_compatible,
+    normalize_output_language,
+    output_language_name,
+)
 from backend.app.services.project_service import require_project
 from backend.app.services.shotlist_service import list_shots, update_shot
 
@@ -23,8 +28,8 @@ Each shot must include: scene_id, visual_description, prompt, negative_prompt,
 revision_notes.
 
 Rules:
-- Use the same language as the source script for visual_description, prompt,
-  and revision_notes unless the source script is English.
+- Use exactly the requested output language for visual_description, prompt,
+  negative_prompt, and revision_notes.
 - Build a clear beat sequence: hook, setup, escalation, turn, reveal, payoff.
 - Each panel must show one visual moment with a specific subject, action, emotion,
   camera distance, composition, and continuity notes.
@@ -44,6 +49,7 @@ def breakdown_script(payload: ScriptBreakdownRequest) -> dict[str, Any]:
     offline = is_offline_mode()
     if not payload.use_ai:
         return {"ok": True, "source": "local", "shots": _breakdown_locally(payload), "warnings": []}
+    ai_error = ""
     if not offline and not errors:
         ai_result = _breakdown_with_ai(get_text_api_config(settings), payload)
         if ai_result["shots"]:
@@ -53,6 +59,7 @@ def breakdown_script(payload: ScriptBreakdownRequest) -> dict[str, Any]:
                 "shots": ai_result["shots"],
                 "warnings": ai_result["warnings"],
             }
+        ai_error = str(ai_result.get("error") or "")
 
     if offline:
         message = "Cloud AI is unavailable in offline mode."
@@ -62,7 +69,7 @@ def breakdown_script(payload: ScriptBreakdownRequest) -> dict[str, Any]:
         error = "configuration_error"
     else:
         message = "Text model did not return usable storyboard JSON."
-        error = "invalid_model_output"
+        error = ai_error or "invalid_model_output"
     return {
         "ok": False,
         "source": "ai",
@@ -89,6 +96,7 @@ def rewrite_existing_storyboard(project_id: str, payload: ShotRewriteRequest) ->
             target_panel_count=len(existing_shots),
             include_dialogue=True,
             use_ai=payload.use_ai,
+            output_language=payload.output_language,
         )
     )
     if not breakdown.get("ok", True):
@@ -130,6 +138,7 @@ def _breakdown_with_ai(
     settings: dict[str, Any],
     payload: ScriptBreakdownRequest,
 ) -> dict[str, Any]:
+    language_name = output_language_name(payload.output_language, payload.script)
     user_prompt = f"""
 Script:
 {payload.script}
@@ -139,6 +148,7 @@ Visual style: {payload.style}
 Visual format: {payload.visual_format}
 Panel separation style: {payload.panel_gutter_style}
 Include dialogue or narration notes: {payload.include_dialogue}
+Required output language: {language_name}
 
 Before writing panels, infer the main characters, recurring props, location flow,
 emotional arc, and panel rhythm from the full script.
@@ -147,7 +157,8 @@ Create exactly the target number of panels unless the story is clearly too short
 For each panel:
 - scene_id should be P001, P002, ...
 - visual_description should be a natural-language panel design, not raw script text.
-- prompt should be a direct image prompt under 80 words and start with "Panel X of N".
+- visual_description, prompt, negative_prompt, and revision_notes must all use {language_name}.
+- prompt should be a direct image prompt under 80 words and start with a localized equivalent of "Panel X of N".
 - For single_panel, prompt must describe one comic/storyboard panel with visible story action, not a poster or cover illustration.
 - For webtoon_strip, prompt must describe a vertical 3-5 beat mini comic strip inside one image with stacked panels and top-to-bottom reading flow.
 - If panel separation style is framed, every panel prompt must require consistent visible gutters/borders with uniform spacing.
@@ -173,6 +184,21 @@ For each panel:
     if not isinstance(raw_shots, list):
         return {"shots": [], "warnings": ["AI response did not include a shots array."]}
 
+    locale = normalize_output_language(payload.output_language, payload.script)
+    raw_visible_text = " ".join(
+        " ".join(
+            str(item.get(key) or "")
+            for key in ("visual_description", "prompt", "negative_prompt", "revision_notes")
+        )
+        for item in raw_shots
+        if isinstance(item, dict)
+    )
+    if raw_shots and not is_output_language_compatible(raw_visible_text, locale):
+        return {
+            "shots": [],
+            "warnings": ["AI storyboard output language did not match the selected interface language."],
+            "error": "output_language_mismatch",
+        }
     shots = [_coerce_shot(item, payload, index) for index, item in enumerate(raw_shots, 1)]
     shots = [shot for shot in shots if shot.prompt.strip()]
     return {"shots": shots[: payload.target_panel_count], "warnings": []}
@@ -203,11 +229,12 @@ def _coerce_shot(
     index: int,
 ) -> ShotCreate:
     data = item if isinstance(item, dict) else {}
+    locale = normalize_output_language(payload.output_language, payload.script)
     visual = str(data.get("visual_description") or data.get("description") or "").strip()
     prompt = str(data.get("prompt") or visual).strip()
-    panel_prefix = f"Panel {index} of {payload.target_panel_count}"
+    panel_prefix = _localized_panel_prefix(locale, index, payload.target_panel_count)
     if panel_prefix.lower() not in prompt.lower():
-        prompt = f"{panel_prefix}, {_format_prompt_prefix(payload.visual_format)}, {prompt}"
+        prompt = f"{panel_prefix}, {_format_prompt_prefix(payload.visual_format, locale)}, {prompt}"
     style_hint = _localized_style_hint(payload.style, payload.script)
     if style_hint and style_hint.lower() not in prompt.lower():
         prompt = f"{prompt}。风格参考：{style_hint}" if _looks_cjk(payload.script) else f"{prompt}, style reference: {style_hint}"
@@ -223,19 +250,47 @@ def _coerce_shot(
 def _breakdown_locally(payload: ScriptBreakdownRequest) -> list[ShotCreate]:
     chunks = _split_script(payload.script, payload.target_panel_count)
     shots: list[ShotCreate] = []
-    cjk = _looks_cjk(payload.script)
+    locale = normalize_output_language(payload.output_language, payload.script)
     style_hint = _localized_style_hint(payload.style, payload.script)
     for index, chunk in enumerate(chunks, 1):
         visual = _clean_chunk(chunk)
-        prompt_source = _visualize_local_beat(visual, index, cjk)
-        if cjk:
+        prompt_source = _visualize_local_beat(visual, index, locale in {"zh-CN", "zh-TW"})
+        if locale in {"zh-CN", "zh-TW"}:
             prompt_source = prompt_source.rstrip("。！？!?；;,.，")
-            format_instruction = _localized_format_instruction(payload.visual_format, payload.panel_gutter_style, cjk=True)
+            format_instruction = (
+                _localized_format_instruction_for_locale(
+                    payload.visual_format, payload.panel_gutter_style, locale
+                )
+                if locale == "zh-TW"
+                else _localized_format_instruction(payload.visual_format, payload.panel_gutter_style, cjk=True)
+            )
+            clarity_instruction = (
+                "主體明確，動作和情緒可見，鏡頭構圖有層次，不要畫文字、字幕或氣泡。風格參考："
+                if locale == "zh-TW"
+                else "主体明确，动作和情绪可见，镜头构图有层次，不要画文字、字幕或气泡。风格参考："
+            )
             prompt = (
-                f"漫画分镜第 {index} 格：{prompt_source}。"
+                f"{_localized_panel_prefix(locale, index, payload.target_panel_count)}：{prompt_source}。"
                 f"{format_instruction}"
-                f"主体明确，动作和情绪可见，镜头构图有层次，不要画文字、字幕或气泡。"
-                f"风格参考：{style_hint}"
+                f"{clarity_instruction}{style_hint}"
+            )
+        elif locale == "ja":
+            format_instruction = _localized_format_instruction_for_locale(
+                payload.visual_format, payload.panel_gutter_style, locale
+            )
+            prompt = (
+                f"{_localized_panel_prefix(locale, index, payload.target_panel_count)}：{prompt_source}。"
+                f"{format_instruction} 主体、動作、感情、構図を明確にし、文字や吹き出しを描かない。"
+                f"スタイル参照：{style_hint}"
+            )
+        elif locale == "ko":
+            format_instruction = _localized_format_instruction_for_locale(
+                payload.visual_format, payload.panel_gutter_style, locale
+            )
+            prompt = (
+                f"{_localized_panel_prefix(locale, index, payload.target_panel_count)}: {prompt_source}. "
+                f"{format_instruction} 인물, 동작, 감정과 구도를 명확히 하고 글자나 말풍선을 그리지 마세요. "
+                f"스타일 참고: {style_hint}"
             )
         else:
             format_instruction = _localized_format_instruction(payload.visual_format, payload.panel_gutter_style, cjk=False)
@@ -292,10 +347,56 @@ def _script_from_existing_shots(shots: list[dict]) -> str:
     return "\n\n".join(chunks) or "Create a continuous manga storyboard sequence from the existing panel list."
 
 
-def _format_prompt_prefix(visual_format: str) -> str:
+def _localized_panel_prefix(locale: str, index: int, total: int) -> str:
+    if locale == "zh-TW":
+        return f"漫畫分鏡第 {index}/{total} 格"
+    if locale == "zh-CN":
+        return f"漫画分镜第 {index}/{total} 格"
+    if locale == "ja":
+        return f"絵コンテ {index}/{total} コマ"
+    if locale == "ko":
+        return f"스토리보드 {index}/{total} 컷"
+    return f"Panel {index} of {total}"
+
+
+def _format_prompt_prefix(visual_format: str, locale: str = "en") -> str:
+    if locale == "ja":
+        return "縦型ウェブトゥーンの連続ミニストリップ" if visual_format == "webtoon_strip" else "連続する漫画の単一シネマティックコマ"
+    if locale == "ko":
+        return "세로형 웹툰 연속 미니 스트립" if visual_format == "webtoon_strip" else "연속 만화의 단일 시네마틱 컷"
+    if locale in {"zh-CN", "zh-TW"}:
+        if locale == "zh-TW":
+            return "豎向條漫連續小段" if visual_format == "webtoon_strip" else "連續漫畫的單幅電影感分鏡"
+        return "竖向条漫连续小段" if visual_format == "webtoon_strip" else "连续漫画的单幅电影感分镜"
     if visual_format == "webtoon_strip":
         return "vertical webtoon mini strip, 3 to 5 stacked comic beats inside one image, continuous manga sequence"
     return "single cinematic comic panel, continuous manga storyboard sequence"
+
+
+def _localized_format_instruction_for_locale(
+    visual_format: str,
+    panel_gutter_style: str,
+    locale: str,
+) -> str:
+    if locale == "ja":
+        if visual_format == "single_panel":
+            return "1 枚に 1 つの物語の瞬間だけを描き、コラージュにしない。"
+        if panel_gutter_style == "seamless":
+            return "1 枚の縦長画像に 3〜5 の連続場面を描き、枠線や白い余白を使わず背景を連続させる。"
+        return "1 枚の縦長画像に 3〜5 の連続コマを描き、同じ太さと色の枠線と均等な余白を使う。"
+    if locale == "ko":
+        if visual_format == "single_panel":
+            return "한 이미지에는 하나의 이야기 순간만 그리고 콜라주로 만들지 마세요."
+        if panel_gutter_style == "seamless":
+            return "한 장의 세로 이미지에 3~5개 연속 장면을 그리고 테두리나 흰 여백 없이 배경을 이어 주세요."
+        return "한 장의 세로 이미지에 3~5개 연속 컷을 그리고 같은 굵기와 색의 테두리 및 균일한 여백을 사용하세요."
+    if locale == "zh-TW":
+        if visual_format == "single_panel":
+            return "一張圖片只描繪一個故事瞬間，不要製作拼貼。"
+        if panel_gutter_style == "seamless":
+            return "一張豎圖包含 3 到 5 個連續故事節拍，不使用邊框或白色留白，以連續背景銜接。"
+        return "一張豎圖包含 3 到 5 個連續分鏡，使用相同粗細與顏色的邊框及均等留白。"
+    return _localized_format_instruction(visual_format, panel_gutter_style, cjk=False)
 
 
 def _localized_format_instruction(visual_format: str, panel_gutter_style: str, cjk: bool) -> str:
