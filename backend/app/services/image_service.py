@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from threading import BoundedSemaphore, Lock
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from backend.app.config import (
     get_active_settings,
@@ -30,6 +30,7 @@ from backend.app.services.project_service import (
     get_project_workspace,
     project_file_url,
     require_project,
+    resolve_project_path,
     to_project_relative_path,
     save_project_bible,
     utc_now,
@@ -247,9 +248,11 @@ def _panel_gutter_note(panel_gutter_style: str) -> str:
             "background flow, camera movement, or soft transitions."
         )
     return (
-        "PANEL SEPARATION LOCK: Use consistent visible gutters and panel borders across every "
-        "stacked beat. Keep border thickness, spacing, and margins uniform; do not mix framed "
-        "and borderless panels in the same image."
+        "PANEL SEPARATION LOCK: Use one uniform border system across every stacked beat. "
+        "At a 1024px canvas width, every internal separator and outer panel border must have an "
+        "equivalent 4px thickness, one identical solid color, square joins, and equal gutter spacing. "
+        "Do not vary border thickness, opacity, color, decoration, spacing, or margins, and do not mix "
+        "framed and borderless panels in the same image."
     )
 
 
@@ -357,6 +360,72 @@ def _normalize_generated_result(result: dict, size_item: dict) -> dict:
     return result
 
 
+def _clamped_ratio(target: float, current: float, lower: float, upper: float) -> float:
+    if target <= 0 or current <= 0:
+        return 1.0
+    return max(lower, min(upper, target / current))
+
+
+def _apply_visual_anchor_tone_lock(output_path: str | Path, bible: dict) -> dict:
+    anchor = bible.get("visual_anchor_metrics")
+    if not isinstance(anchor, dict) or not anchor:
+        return {"visual_anchor_applied": False}
+    path = Path(output_path)
+    if not path.exists():
+        return {"visual_anchor_applied": False, "visual_anchor_error": "generated_image_missing"}
+    try:
+        before = _image_style_metrics(path)
+        brightness_factor = _clamped_ratio(
+            float(anchor.get("brightness") or 0),
+            float(before.get("brightness") or 0),
+            0.82,
+            1.22,
+        )
+        contrast_factor = _clamped_ratio(
+            float(anchor.get("contrast") or 0),
+            float(before.get("contrast") or 0),
+            0.85,
+            1.18,
+        )
+        saturation_factor = _clamped_ratio(
+            float(anchor.get("saturation") or 0),
+            float(before.get("saturation") or 0),
+            0.85,
+            1.18,
+        )
+        adjusted = any(
+            abs(factor - 1.0) >= 0.015
+            for factor in (brightness_factor, contrast_factor, saturation_factor)
+        )
+        if adjusted:
+            with Image.open(path) as image:
+                rendered = ImageOps.exif_transpose(image).convert("RGB")
+                rendered = ImageEnhance.Brightness(rendered).enhance(brightness_factor)
+                rendered = ImageEnhance.Contrast(rendered).enhance(contrast_factor)
+                rendered = ImageEnhance.Color(rendered).enhance(saturation_factor)
+                temporary = path.with_name(f".{path.stem}-visual-lock-{_generation_stamp()}.tmp")
+                try:
+                    rendered.save(temporary, format="PNG", optimize=True)
+                    temporary.replace(path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        after = _image_style_metrics(path)
+        return {
+            "visual_anchor_applied": True,
+            "visual_anchor_adjusted": adjusted,
+            "visual_anchor_shot_id": str(bible.get("visual_anchor_shot_id") or ""),
+            "visual_metrics_before": before,
+            "visual_metrics_after": after,
+            "visual_adjustment": {
+                "brightness": round(brightness_factor, 3),
+                "contrast": round(contrast_factor, 3),
+                "saturation": round(saturation_factor, 3),
+            },
+        }
+    except (OSError, TypeError, ValueError) as exc:
+        return {"visual_anchor_applied": False, "visual_anchor_error": str(exc)}
+
+
 def _outputs_from_results(project_id: str, results: list[dict]) -> list[dict]:
     return [
         {
@@ -369,6 +438,13 @@ def _outputs_from_results(project_id: str, results: list[dict]) -> list[dict]:
             "final_size": item.get("final_size", ""),
             "normalized": item.get("normalized", False),
             "normalization_error": item.get("normalization_error", ""),
+            "visual_anchor_applied": item.get("visual_anchor_applied", False),
+            "visual_anchor_adjusted": item.get("visual_anchor_adjusted", False),
+            "visual_anchor_shot_id": item.get("visual_anchor_shot_id", ""),
+            "visual_metrics_before": item.get("visual_metrics_before", {}),
+            "visual_metrics_after": item.get("visual_metrics_after", {}),
+            "visual_adjustment": item.get("visual_adjustment", {}),
+            "visual_anchor_error": item.get("visual_anchor_error", ""),
             "output_path": to_project_relative_path(project_id, item.get("output_path", "")),
             "output_url": _public_asset_url(project_id, item["target_filename"])
             if item.get("output_path")
@@ -613,6 +689,8 @@ def _generate_shot_image_locked(
         result["target_filename"] = filename
         if result.get("ok"):
             _normalize_generated_result(result, size_item)
+            if not result.get("normalization_error"):
+                result.update(_apply_visual_anchor_tone_lock(output_path, project_bible))
             if result.get("normalization_error") or result.get("final_size") != size_item["size"]:
                 result.update(
                     {
@@ -805,7 +883,6 @@ def _generate_shot_image_locked(
         "details": details,
     }
 
-
 def generate_project_batch(
     project_id: str,
     shot_ids: list[str] | None = None,
@@ -911,6 +988,9 @@ def delete_reference_image(project_id: str, filename: str) -> dict:
             {
                 **bible,
                 "style_reference_filename": "",
+                "visual_continuity_lock": "",
+                "visual_anchor_shot_id": "",
+                "visual_anchor_metrics": {},
             },
         )
     path.unlink()
@@ -994,25 +1074,30 @@ def _reference_category_from_filename(filename: str) -> str:
     return ""
 
 
+def _flattened_pixels(image: Image.Image) -> list:
+    getter = getattr(image, "get_flattened_data", None)
+    return list(getter() if getter else image.getdata())
+
+
 def _image_style_metrics(path: Path) -> dict:
     with Image.open(path) as image:
         image = ImageOps.exif_transpose(image).convert("RGB")
         image.thumbnail((384, 384), Image.Resampling.LANCZOS)
-        pixels = list(image.getdata())
+        pixels = _flattened_pixels(image)
         if not pixels:
             return {}
         sample_step = max(1, len(pixels) // 6000)
         sampled = pixels[::sample_step]
         avg = tuple(round(sum(pixel[index] for pixel in sampled) / len(sampled)) for index in range(3))
         grayscale = image.convert("L")
-        gray_pixels = list(grayscale.getdata())[::sample_step]
+        gray_pixels = _flattened_pixels(grayscale)[::sample_step]
         brightness = round(sum(gray_pixels) / len(gray_pixels), 1)
         contrast = round(
             (sum((value - brightness) ** 2 for value in gray_pixels) / len(gray_pixels)) ** 0.5,
             1,
         )
         edges = grayscale.filter(ImageFilter.FIND_EDGES)
-        edge_pixels = list(edges.getdata())[::sample_step]
+        edge_pixels = _flattened_pixels(edges)[::sample_step]
         edge_density = round(sum(1 for value in edge_pixels if value > 32) / len(edge_pixels), 3)
         unique_colors = len({(r // 32, g // 32, b // 32) for r, g, b in sampled})
         saturation_values = []
@@ -1052,7 +1137,8 @@ def _local_style_analysis_prompt(metrics: dict) -> str:
         lighting = "moderate contrast with clear value separation"
     return (
         f"{palette}, {linework}, {lighting}, average RGB {metrics.get('average_rgb')}, "
-        f"brightness {metrics.get('brightness')}, edge density {metrics.get('edge_density')}. "
+        f"brightness {metrics.get('brightness')}, contrast {metrics.get('contrast')}, "
+        f"saturation {metrics.get('saturation')}, edge density {metrics.get('edge_density')}. "
         "Preserve these style traits as reusable rendering rules rather than copying the exact image content."
     )
 
@@ -1075,6 +1161,7 @@ def analyze_reference_style(
     project_id: str,
     reference_filename: str,
     apply_to_bible: bool = True,
+    as_visual_anchor: bool = False,
 ) -> dict:
     require_project(project_id)
     reference_path = get_project_reference_dir(project_id) / Path(reference_filename).name
@@ -1099,8 +1186,11 @@ def analyze_reference_style(
             user_prompt=(
                 "Analyze this reference image as a reusable custom visual style for storyboard image generation. "
                 "Return only JSON with keys: style_prompt, brushwork, linework, color_palette, value_structure, "
-                "composition, texture, typography_or_symbol_logic, do_rules, avoid_rules. "
+                "composition, texture, exposure_target, color_temperature, rendering_density, "
+                "panel_border_color, panel_border_thickness, gutter_color, gutter_width, "
+                "typography_or_symbol_logic, do_rules, avoid_rules. "
                 "style_prompt must be one concise English prompt under 900 characters, strict enough to apply to new images. "
+                "Describe border thickness relative to a 1024px canvas and explicitly state whether the image is framed or seamless. "
                 f"Local measured image metrics: {json.dumps(metrics, ensure_ascii=False)}"
             ),
             image_b64=image_b64,
@@ -1117,6 +1207,11 @@ def analyze_reference_style(
             f"Value structure: {parsed.get('value_structure', '')}",
             f"Composition: {parsed.get('composition', '')}",
             f"Texture: {parsed.get('texture', '')}",
+            f"Exposure target: {parsed.get('exposure_target', '')}",
+            f"Color temperature: {parsed.get('color_temperature', '')}",
+            f"Rendering density: {parsed.get('rendering_density', '')}",
+            f"Panel border: {parsed.get('panel_border_color', '')}; {parsed.get('panel_border_thickness', '')}",
+            f"Gutter: {parsed.get('gutter_color', '')}; {parsed.get('gutter_width', '')}",
             f"Typography/symbol logic: {parsed.get('typography_or_symbol_logic', '')}",
             f"Do: {parsed.get('do_rules', '')}",
             f"Avoid: {parsed.get('avoid_rules', '')}",
@@ -1136,12 +1231,39 @@ def analyze_reference_style(
         f"{style_prompt} Strictly preserve brushwork, color structure, value rhythm, texture, "
         "line quality, and composition logic from the selected reference; do not copy exact content."
     )
+    if parsed:
+        continuity_lock = " ".join(
+            part
+            for part in [
+                f"Exposure/value baseline: {parsed.get('exposure_target', '')}.",
+                f"Color temperature: {parsed.get('color_temperature', '')}.",
+                f"Rendering density: {parsed.get('rendering_density', '')}.",
+                f"Linework: {parsed.get('linework', '')}.",
+                f"Panel borders: {parsed.get('panel_border_color', '')}; {parsed.get('panel_border_thickness', '')}.",
+                f"Gutters: {parsed.get('gutter_color', '')}; {parsed.get('gutter_width', '')}.",
+                f"Palette: {parsed.get('color_palette', '')}.",
+            ]
+            if not part.endswith(": .") and not part.endswith(": ; .")
+        )
+    else:
+        continuity_lock = (
+            f"Measured master-image rendering baseline: {local_analysis} "
+            "Use one unchanged project-wide line-weight system and one unchanged framed/seamless panel system."
+        )
     bible = get_project_bible(project_id)
     next_bible = {
         **bible,
         "visual_style": style_lock,
         "style_analysis": "\n".join(part for part in analysis_parts if part.strip()),
         "style_reference_filename": reference_path.name,
+        **(
+            {
+                "visual_continuity_lock": continuity_lock,
+                "visual_anchor_metrics": metrics,
+            }
+            if as_visual_anchor
+            else {}
+        ),
     }
     if apply_to_bible:
         save_project_bible(project_id, next_bible)
@@ -1156,9 +1278,55 @@ def analyze_reference_style(
         "applied": apply_to_bible,
         "style_prompt": style_lock,
         "style_analysis": next_bible["style_analysis"],
+        "visual_continuity_lock": continuity_lock,
         "metrics": metrics,
         "ai_error": "" if ai_result.get("ok") else ai_result.get("error", ""),
         "raw_text": ai_result.get("text", ""),
+    }
+
+
+def set_shot_visual_anchor(project_id: str, shot_id: str) -> dict:
+    require_project(project_id)
+    shot = get_shot(project_id, shot_id)
+    if not shot:
+        raise FileNotFoundError(f"Shot not found: {shot_id}")
+    output_path = str(shot.get("output_path") or "")
+    if not output_path:
+        raise ValueError("The panel must have a locally saved selected image before it can become the visual master.")
+    source_path = resolve_project_path(project_id, output_path)
+    if not source_path.exists() or not source_path.is_file():
+        raise FileNotFoundError("The selected panel image is missing from local storage.")
+
+    previous_bible = get_project_bible(project_id)
+    previous_anchor = str(previous_bible.get("style_reference_filename") or "")
+    reference = save_reference_image(
+        project_id,
+        f"visual-anchor-{shot_id}{source_path.suffix or '.png'}",
+        source_path.read_bytes(),
+    )
+    analysis = analyze_reference_style(
+        project_id,
+        reference_filename=reference["filename"],
+        apply_to_bible=True,
+        as_visual_anchor=True,
+    )
+    next_bible = {
+        **get_project_bible(project_id),
+        "visual_anchor_shot_id": shot_id,
+        "visual_anchor_metrics": analysis.get("metrics") or {},
+    }
+    saved_bible = save_project_bible(project_id, next_bible)
+    if previous_anchor.startswith("visual-anchor-") and previous_anchor != reference["filename"]:
+        try:
+            delete_reference_image(project_id, previous_anchor)
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    return {
+        **analysis,
+        "shot_id": shot_id,
+        "scene_id": shot.get("scene_id", ""),
+        "reference": reference,
+        "bible": saved_bible,
     }
 
 
@@ -1456,43 +1624,3 @@ def _reference_concept_prompts(
             f"Story context: {world}. No text, no labels. Negative prompt: {negative}"
         ),
     }
-
-
-def edit_shot_with_reference(
-    project_id: str,
-    shot_id: str,
-    reference_filename: str,
-    request: ImageGenerationRequest | None = None,
-) -> dict:
-    require_project(project_id)
-    shot = get_shot(project_id, shot_id)
-    if not shot:
-        raise FileNotFoundError(f"Shot not found: {shot_id}")
-    if is_offline_mode():
-        return {
-            "project_id": project_id,
-            "shot_id": shot_id,
-            "status": "blocked",
-            "output_path": shot.get("output_path", ""),
-            "output_url": shot.get("output_url", ""),
-            "error": "offline_mode",
-            "error_message": "Cloud image editing is unavailable in offline mode.",
-        }
-    if shot.get("locked"):
-        return {
-            "project_id": project_id,
-            "shot_id": shot_id,
-            "status": "blocked",
-            "output_path": shot.get("output_path", ""),
-            "output_url": shot.get("output_url", ""),
-            "error": "shot_locked",
-            "error_message": "Unlock this approved shot before editing its image.",
-        }
-    reference_path = get_project_reference_dir(project_id) / Path(reference_filename).name
-    if not reference_path.exists():
-        raise FileNotFoundError(f"Reference image not found: {reference_filename}")
-    payload = request.model_copy(deep=True) if request else ImageGenerationRequest()
-    payload.reference_filenames = list(
-        dict.fromkeys([*payload.reference_filenames, Path(reference_filename).name])
-    )
-    return generate_shot_image(project_id, shot_id, payload)

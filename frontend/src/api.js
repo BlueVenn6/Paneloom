@@ -165,6 +165,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  setShotVisualAnchor: (projectId, shotId) =>
+    request(`/projects/${projectId}/generate/${shotId}/visual-anchor`, {
+      method: "POST",
+    }),
   importDocument: (file) => {
     const body = new FormData();
     body.append("file", file);
@@ -227,8 +231,6 @@ export const api = {
     request("/settings/ui-preferences", { method: "POST", body: JSON.stringify(payload) }),
   saveSettings: (payload) =>
     request("/settings", { method: "POST", body: JSON.stringify(payload) }),
-  testSettings: (payload) =>
-    request("/settings/test", { method: "POST", body: JSON.stringify(payload) }),
   testTextSettings: (payload, signal) =>
     request("/settings/test/text", { method: "POST", body: JSON.stringify(payload), signal }),
   testImageSettings: (payload, signal) =>

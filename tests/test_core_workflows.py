@@ -820,6 +820,75 @@ class IsolatedProjectTestCase(unittest.TestCase):
         self.assertIn(reference["filename"].rsplit(".", 1)[0], observed["prompt"])
         self.assertIn("direct generation endpoint does not receive image pixels", observed["prompt"])
 
+    def test_generated_panel_becomes_offline_visual_master_and_locks_later_prompts(self):
+        project = self.create_project("Visual master")
+        project_id = project["project_id"]
+        shot = add_shot(
+            project_id,
+            ShotCreate(scene_id="P001", prompt="Warm framed market scene"),
+        )
+        image_path = project_service.get_project_generated_dir(project_id) / "visual-master.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (96, 160), color=(170, 120, 70)).save(image_path)
+        update_shot(
+            project_id,
+            shot["shot_id"],
+            {
+                "status": "done",
+                "output_path": project_service.to_project_relative_path(project_id, image_path),
+                "output_url": f"/projects/{project_id}/files/generated/{image_path.name}",
+            },
+        )
+
+        with patch.object(image_service, "is_offline_mode", return_value=True):
+            result = image_service.set_shot_visual_anchor(project_id, shot["shot_id"])
+
+        self.assertEqual(result["source"], "local_metrics")
+        bible = project_service.get_project_bible(project_id)
+        self.assertEqual(bible["visual_anchor_shot_id"], shot["shot_id"])
+        self.assertTrue(bible["visual_anchor_metrics"])
+        self.assertIn("Measured master-image rendering baseline", bible["visual_continuity_lock"])
+        self.assertTrue((project_service.get_project_reference_dir(project_id) / result["reference"]["filename"]).is_file())
+        locked_prompt, _ = apply_bible_to_shot_prompt(shot, bible)
+        self.assertIn("VISUAL MASTER LOCK", locked_prompt)
+        self.assertIn("panel-border thickness", locked_prompt)
+
+        image_service.delete_reference_image(project_id, result["reference"]["filename"])
+        cleared = project_service.get_project_bible(project_id)
+        self.assertEqual(cleared["visual_anchor_shot_id"], "")
+        self.assertEqual(cleared["visual_anchor_metrics"], {})
+
+    def test_visual_master_tone_lock_moves_generated_output_toward_anchor(self):
+        project = self.create_project("Tone lock")
+        output = project_service.get_project_generated_dir(project["project_id"]) / "dark-output.png"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGB", (64, 64))
+        image.putdata(
+            [
+                (35 + (index % 16) * 2, 30 + (index % 8) * 2, 25)
+                for index in range(64 * 64)
+            ]
+        )
+        image.save(output)
+        before = image_service._image_style_metrics(output)
+
+        result = image_service._apply_visual_anchor_tone_lock(
+            output,
+            {
+                "visual_anchor_shot_id": "shot-master",
+                "visual_anchor_metrics": {
+                    "brightness": 120,
+                    "contrast": 24,
+                    "saturation": 0.42,
+                },
+            },
+        )
+
+        self.assertTrue(result["visual_anchor_applied"])
+        self.assertTrue(result["visual_anchor_adjusted"])
+        self.assertGreater(result["visual_metrics_after"]["brightness"], before["brightness"])
+        self.assertEqual(result["visual_anchor_shot_id"], "shot-master")
+
     def test_duplicate_shot_generation_reuses_the_active_job(self):
         project = self.create_project("Duplicate generation")
         shot = add_shot(

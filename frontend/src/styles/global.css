@@ -1884,6 +1884,25 @@ th {
   overflow-wrap: anywhere;
 }
 
+.visual-anchor-status {
+  display: grid;
+  gap: 5px;
+  border-left: 3px solid #4c9a91;
+  padding: 10px 12px;
+  background: #111a1d;
+}
+
+.visual-anchor-status span {
+  color: #e9f5f2;
+  font-weight: 700;
+}
+
+.visual-anchor-status small,
+.visual-tone-status {
+  color: #91bcb5;
+  line-height: 1.45;
+}
+
 @media (max-width: 980px) {
   .schedule-stats {
     grid-template-columns: 1fr;

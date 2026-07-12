@@ -480,6 +480,15 @@ def apply_bible_to_shot_prompt(shot: dict, bible: dict) -> tuple[str, str]:
             f"{color_lock}"
         )
     revision_notes = str(shot.get("revision_notes", "")).strip()
+    visual_continuity_lock = str(bible.get("visual_continuity_lock", "")).strip()
+    continuity_instruction = (
+        "VISUAL MASTER LOCK - mandatory project-wide continuity rules: "
+        f"{visual_continuity_lock} Do not change exposure baseline, palette density, color temperature, "
+        "line weight, rendering density, panel-border color, panel-border thickness, or gutter rhythm "
+        "between storyboard images unless the story explicitly requires a lighting change."
+        if visual_continuity_lock
+        else ""
+    )
     revision_instruction = (
         f"REVISION NOTES - mandatory changes for this generation: {revision_notes}"
         if revision_notes
@@ -488,6 +497,7 @@ def apply_bible_to_shot_prompt(shot: dict, bible: dict) -> tuple[str, str]:
     prompt_parts = [
         bible.get("prompt_prefix", ""),
         style_lock,
+        continuity_instruction,
         bible.get("characters", ""),
         bible.get("locations", ""),
         bible.get("props", ""),

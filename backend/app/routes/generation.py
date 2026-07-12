@@ -17,13 +17,13 @@ from backend.app.services.image_service import (
     MAX_REFERENCE_BYTES,
     analyze_reference_style,
     delete_reference_image,
-    edit_shot_with_reference,
     generate_reference_concepts,
     generate_project_batch,
     generate_shot_image,
     list_reference_images,
     plan_reference_assets,
     save_reference_image,
+    set_shot_visual_anchor,
 )
 from backend.app.services.project_service import utc_now
 from backend.app.services.project_service import require_project
@@ -380,23 +380,15 @@ def analyze_reference_image_style(
     return ApiResponse(ok=True, message="Reference style analyzed.", data=result)
 
 
-@router.post("/{shot_id}/edit-with-reference/{reference_filename}")
-def edit_with_reference(
-    project_id: str,
-    shot_id: str,
-    reference_filename: str,
-    payload: ImageGenerationRequest | None = None,
-) -> ApiResponse:
+@router.post("/{shot_id}/visual-anchor")
+def set_project_visual_anchor(project_id: str, shot_id: str) -> ApiResponse:
     try:
-        result = edit_shot_with_reference(project_id, shot_id, reference_filename, payload)
+        result = set_shot_visual_anchor(project_id, shot_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    ok = result.get("status") == "done"
-    return ApiResponse(
-        ok=ok,
-        message="Image edited from reference." if ok else result.get("error", "image_edit_failed"),
-        data=result,
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(ok=True, message="Project visual master updated.", data=result)
 
 
 @router.post("/{shot_id}")

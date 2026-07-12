@@ -14,7 +14,6 @@ from backend.app.config import (
     PROJECTS_DIR,
     REFERENCE_ASSETS_DIR,
 )
-from backend.app.models.schemas import ProjectCreate
 from backend.app.services import project_service
 
 

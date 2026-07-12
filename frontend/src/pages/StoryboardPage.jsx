@@ -30,6 +30,11 @@ const defaultBible = {
   props: "",
   world_notes: "",
   prompt_prefix: "",
+  style_analysis: "",
+  style_reference_filename: "",
+  visual_continuity_lock: "",
+  visual_anchor_shot_id: "",
+  visual_anchor_metrics: {},
   negative_prompt:
     "watermark, random text, speech bubble text, logo, distorted hands, bad anatomy",
 };
@@ -981,6 +986,29 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       return {
         ...response,
         localizedMessage: t("referenceStyleAnalyzed"),
+      };
+    });
+  }
+
+  async function handleSetVisualAnchor(shot) {
+    if (!currentProject || !shot?.shot_id || !shot.output_url) return;
+    if (!window.confirm(t("visualAnchorConfirm"))) return;
+    await run(`visual-anchor-${shot.shot_id}`, async () => {
+      const response = await api.setShotVisualAnchor(currentProject.project_id, shot.shot_id);
+      if (response.data?.bible) {
+        const nextBible = { ...defaultBible, ...response.data.bible };
+        setBible(nextBible);
+        setScriptForm((current) => ({
+          ...current,
+          style: nextBible.visual_style || current.style,
+        }));
+      }
+      if (response.data?.style_analysis) {
+        setStyleAnalysis(response.data.style_analysis);
+      }
+      return {
+        ...response,
+        localizedMessage: `${t("visualAnchorApplied")} ${shot.scene_id || shot.shot_id}`,
       };
     });
   }
@@ -2264,6 +2292,16 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                 <p>{styleAnalysis}</p>
               </div>
             )}
+            {bible.visual_anchor_shot_id && (
+              <div className="visual-anchor-status">
+                <strong>{t("visualAnchorCurrent")}</strong>
+                <span>
+                  {shots.find((shot) => shot.shot_id === bible.visual_anchor_shot_id)?.scene_id ||
+                    bible.visual_anchor_shot_id}
+                </span>
+                <small>{t("visualAnchorHint")}</small>
+              </div>
+            )}
           </div>
         </div>
 
@@ -2557,6 +2595,16 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                               </div>
                             )}
                             {Array.isArray(shot.outputs) &&
+                              shot.outputs.some(
+                                (output) =>
+                                  output.output_url === shot.output_url &&
+                                  output.visual_anchor_applied,
+                              ) && (
+                                <small className="visual-tone-status">
+                                  {t("visualToneNormalized")}
+                                </small>
+                              )}
+                            {Array.isArray(shot.outputs) &&
                               shot.outputs.some((output) => output.normalization_error) && (
                                 <div className="row-error">
                                   {t("imageSizeMismatch")}
@@ -2660,6 +2708,23 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                           >
                             {t("copyStoryboardText")}
                           </button>
+                          {hasOutput && (
+                            <button
+                              className="secondary"
+                              disabled={
+                                Boolean(busy) ||
+                                bible.visual_anchor_shot_id === shot.shot_id
+                              }
+                              onClick={() => handleSetVisualAnchor(shot)}
+                              type="button"
+                            >
+                              {busy === `visual-anchor-${shot.shot_id}`
+                                ? t("extractingStyle")
+                                : bible.visual_anchor_shot_id === shot.shot_id
+                                  ? t("visualAnchorCurrent")
+                                  : t("setVisualAnchor")}
+                            </button>
+                          )}
                           <button
                             className={`secondary ${shot.locked ? "" : "danger"}`}
                             onClick={() => handleShotLock(shot)}

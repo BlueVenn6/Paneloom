@@ -150,6 +150,9 @@ class ProjectBiblePayload(BaseModel):
     negative_prompt: str = ""
     style_analysis: str = ""
     style_reference_filename: str = ""
+    visual_continuity_lock: str = ""
+    visual_anchor_shot_id: str = ""
+    visual_anchor_metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectBibleAnalyzeRequest(BaseModel):
