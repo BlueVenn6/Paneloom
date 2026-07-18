@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible Paneloom problem without private project data.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, private scripts, project archives, or generated images you cannot share.
+  - type: input
+    id: version
+    attributes:
+      label: Paneloom version or commit
+      placeholder: 0.1.0-beta.1 or a Git commit hash
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List the smallest sequence that consistently reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove credentials, project text, local usernames, and private paths.
+      render: text

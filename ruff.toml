@@ -1,0 +1,5 @@
+target-version = "py311"
+
+[lint.per-file-ignores]
+# Standalone acceptance scripts add the repository root before importing local packages.
+"tests/acceptance_*.py" = ["E402"]

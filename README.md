@@ -43,6 +43,7 @@ Install backend dependencies from the repository root:
 
 ```powershell
 python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip==26.1.2
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 ```
 
@@ -82,6 +83,7 @@ Windows native-window architecture prototype for developers only:
 
 ```powershell
 python -m venv .desktop-venv
+.\.desktop-venv\Scripts\python.exe -m pip install --upgrade pip==26.1.2
 .\.desktop-venv\Scripts\python.exe -m pip install -r desktop\requirements.txt
 cd frontend
 npm run build
@@ -153,7 +155,6 @@ TEXT_BASE_URL=
 TEXT_API_KEY=
 TEXT_MODEL=gpt-5.5
 IMAGE_MODEL=gpt-image-2
-IMAGE_SIZE=1024x1024
 IMAGE_QUALITY=low
 IMAGE_RESULT_MODE=auto
 VITE_API_BASE_URL=http://127.0.0.1:8000
@@ -164,6 +165,10 @@ Settings are read in this order:
 1. `%LOCALAPPDATA%\Paneloom\config\settings.json`, with API keys encrypted for the current Windows user through DPAPI.
 2. Environment variables.
 3. Clear API errors if no usable settings exist.
+
+Image dimensions are selected in the storyboard workspace from the requested
+output ratio. There is no global image-size setting that overrides a project's
+workspace choice.
 
 ## Model API Configuration
 
@@ -220,10 +225,17 @@ cloud AI is offline.
 ## Verification
 
 ```powershell
-python -m compileall backend api
-python -m unittest discover -s tests -v
+python -m pip install -r requirements-dev.txt
+python -m ruff check backend api desktop scripts tests
+python -m compileall backend api desktop scripts
+python -m unittest discover -s tests -p "test_*.py" -v
+python scripts\check_repository_hygiene.py
 cd frontend
-npm run build
+npm ci
+npm run check
+npm audit --audit-level=high
+cd ..
+python -m pip_audit -r backend\requirements.txt --progress-spinner off
 ```
 
 ## License

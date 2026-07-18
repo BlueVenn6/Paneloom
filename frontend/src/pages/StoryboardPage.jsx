@@ -550,6 +550,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
     return () => {
       if (workspaceSaveTimerRef.current) window.clearTimeout(workspaceSaveTimerRef.current);
     };
+    // Project identity is the hydration boundary; refreshAll intentionally captures the new project state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- adding refreshAll would reload after every local edit
   }, [currentProject?.project_id]);
 
   useEffect(() => {
@@ -564,6 +566,8 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
       saveWorkspace().catch((error) => setMessage(error.message));
     }, 700);
     return () => window.clearTimeout(workspaceSaveTimerRef.current);
+    // This explicit list is the persisted workspace schema for the debounced save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- saveWorkspace is recreated with the same listed values
   }, [
     currentProject?.project_id,
     scriptForm.script,
@@ -2279,7 +2283,7 @@ export default function StoryboardPage({ currentProject, cloudAiAvailable = true
                         </button>
                         <button
                           className="chip-button"
-                          onClick={() => copyUrl(reference.url)}
+                          onClick={() => copyText(assetUrl(reference.url))}
                           type="button"
                         >
                           {t("copyImageUrl")}

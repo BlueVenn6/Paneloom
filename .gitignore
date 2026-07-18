@@ -13,9 +13,13 @@ __pycache__/
 *.bak
 .runtime-venv/
 .desktop-venv/
+.venv/
 node_modules/
 dist/
 build/
+coverage/
+htmlcov/
+.coverage
 exports/
 assets/
 uploads/

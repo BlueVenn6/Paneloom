@@ -8,14 +8,15 @@ Install backend dependencies:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.\.venv\Scripts\python.exe -m pip install --upgrade pip==26.1.2
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 ```
 
 Install frontend dependencies:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 ```
 
 Run locally:
@@ -29,12 +30,16 @@ Run locally:
 Before submitting a pull request, run:
 
 ```powershell
-python -m compileall backend api
+python -m ruff check backend api desktop scripts tests
+python -m compileall backend api desktop scripts
+python -m unittest discover -s tests -p "test_*.py" -v
+python scripts\check_repository_hygiene.py
 cd frontend
-npm run build
+npm run check
+npm audit --audit-level=high
+cd ..
+python -m pip_audit -r backend\requirements.txt --progress-spinner off
 ```
-
-If lint or test scripts are added later, run them too.
 
 ## Issues
 

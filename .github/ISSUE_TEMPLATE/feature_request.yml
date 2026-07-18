@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a focused improvement to the local desktop creator workflow.
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Creator workflow problem
+      description: Explain the real task that is slow, unclear, or impossible today.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result rather than prescribing a large implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and alternatives
+      description: Note workarounds and what should remain out of scope.

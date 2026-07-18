@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+APP_VERSION = ROOT_DIR.joinpath("VERSION").read_text(encoding="utf-8").strip()
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -37,7 +38,7 @@ allowed_origins = [
     if origin.strip()
 ]
 
-app = FastAPI(title="Paneloom API", version="0.1.0")
+app = FastAPI(title="Paneloom API", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,6 +63,7 @@ def health() -> dict:
     return {
         "ok": True,
         "service": "Paneloom API",
+        "version": APP_VERSION,
         "offline_mode": offline,
         "cloud_ai_available": not offline,
     }

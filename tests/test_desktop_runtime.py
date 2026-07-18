@@ -1,10 +1,13 @@
+import json
 import unittest
+import urllib.request
 from unittest.mock import patch
 
 from PIL import Image
 
 from backend.app.security import redact_sensitive_text
 from backend.app.routes import generation
+from backend.main import APP_VERSION
 from desktop.launcher import (
     APP_USER_MODEL_ID,
     DESKTOP_ICON,
@@ -18,6 +21,23 @@ from desktop.launcher import (
 
 
 class DesktopRuntimeTests(unittest.TestCase):
+    def test_source_version_matches_backend_health_and_frontend_package(self):
+        expected = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+        frontend_package = json.loads(
+            (ROOT_DIR / "frontend" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(APP_VERSION, expected)
+        self.assertEqual(frontend_package["version"], expected)
+
+        server = LocalDesktopServer(create_desktop_app())
+        server.start()
+        try:
+            with urllib.request.urlopen(f"{server.url}/health", timeout=3) as response:
+                health = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(health["version"], expected)
+        finally:
+            server.stop()
+
     def test_runtime_origin_validation_uses_network_requests_not_hidden_debug_text(self):
         runtime_url = "http://127.0.0.1:49152"
         self.assertTrue(

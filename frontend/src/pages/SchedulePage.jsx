@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { useI18n } from "../i18n.jsx";
@@ -133,7 +133,7 @@ export default function SchedulePage({ currentProject }) {
   const [busy, setBusy] = useState("");
   const [showAllShots, setShowAllShots] = useState(false);
 
-  async function refreshSchedule() {
+  const refreshSchedule = useCallback(async () => {
     if (!currentProject) {
       setSchedule(emptySchedule());
       setReview(null);
@@ -152,11 +152,11 @@ export default function SchedulePage({ currentProject }) {
       });
     }
     setReview(normalizeReview(data.reviews?.week) || normalizeReview(data.reviews?.month));
-  }
+  }, [currentProject]);
 
   useEffect(() => {
     refreshSchedule().catch((error) => setMessage(error.message));
-  }, [currentProject?.project_id]);
+  }, [refreshSchedule]);
 
   useEffect(() => {
     if (!currentProject) return undefined;
@@ -165,7 +165,7 @@ export default function SchedulePage({ currentProject }) {
       15_000,
     );
     return () => window.clearInterval(timer);
-  }, [currentProject?.project_id]);
+  }, [currentProject, refreshSchedule]);
 
   const dueTasks = useMemo(
     () =>

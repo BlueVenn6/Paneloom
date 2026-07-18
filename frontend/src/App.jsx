@@ -32,7 +32,7 @@ export default function App() {
   const [projectError, setProjectError] = useState("");
   const [cloudAiAvailable, setCloudAiAvailable] = useState(() => navigator.onLine);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
-  const lastInteractionRef = useRef(Date.now());
+  const lastInteractionRef = useRef(0);
 
   function userFacingError(error) {
     const message = String(error?.message || error || "");
@@ -98,6 +98,8 @@ export default function App() {
     return () => {
       active = false;
     };
+    // Desktop preferences and the initial project list are hydrated exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rerunning on project/language changes would overwrite live selections
   }, []);
 
   useEffect(() => {
