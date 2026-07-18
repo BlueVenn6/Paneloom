@@ -18,6 +18,7 @@ _PROCESS_STARTED_MONOTONIC = time.monotonic()
 ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 DESKTOP_ICON = ROOT_DIR / "desktop" / "resources" / "paneloom.ico"
+APP_USER_MODEL_ID = "Paneloom.Desktop"
 MUTEX_NAME = "Local\\PaneloomDesktopSingleInstance"
 ERROR_ALREADY_EXISTS = 183
 _HARD_EXIT_REQUIRED = False
@@ -25,6 +26,18 @@ _HARD_EXIT_REQUIRED = False
 
 class SingleInstanceError(RuntimeError):
     pass
+
+
+def _configure_windows_app_identity() -> bool:
+    if os.name != "nt":
+        return False
+    set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+    set_app_id.argtypes = [ctypes.c_wchar_p]
+    set_app_id.restype = ctypes.c_long
+    result = set_app_id(APP_USER_MODEL_ID)
+    if result != 0:
+        raise OSError(result, "Windows rejected the Paneloom AppUserModelID.")
+    return True
 
 
 def _apply_windows_window_icon(window) -> bool:
@@ -184,6 +197,7 @@ def runtime_smoke(port: int = 0) -> dict:
 
 def run_window(port: int = 0) -> None:
     global _HARD_EXIT_REQUIRED
+    app_identity_applied = _configure_windows_app_identity()
     try:
         import webview
     except ImportError as exc:
@@ -221,6 +235,8 @@ def run_window(port: int = 0) -> None:
             _write_runtime_state(
                 "window_ready",
                 server.port,
+                app_user_model_id=APP_USER_MODEL_ID,
+                app_user_model_id_applied=app_identity_applied,
                 window_icon_applied=icon_applied,
             )
 
@@ -358,6 +374,7 @@ def _all_requests_use_runtime_origin(
 
 
 def window_smoke(port: int = 0) -> dict:
+    app_identity_applied = _configure_windows_app_identity()
     try:
         import webview
     except ImportError as exc:
@@ -382,6 +399,8 @@ def window_smoke(port: int = 0) -> dict:
         "api_base_text": "",
         "api_requests": [],
         "all_api_requests_use_runtime_origin": False,
+        "app_user_model_id": APP_USER_MODEL_ID,
+        "app_user_model_id_applied": app_identity_applied,
         "window_icon_applied": False,
         "interaction_hash": "",
         "error": "",
@@ -504,6 +523,7 @@ def window_smoke(port: int = 0) -> dict:
             and result["root_rendered"]
             and result["interactive"]
             and result["all_api_requests_use_runtime_origin"]
+            and result["app_user_model_id_applied"]
             and result["window_icon_applied"]
         ),
         "host": "127.0.0.1",
@@ -516,6 +536,8 @@ def window_smoke(port: int = 0) -> dict:
         "api_base_text": result["api_base_text"],
         "api_requests": result["api_requests"],
         "all_api_requests_use_runtime_origin": result["all_api_requests_use_runtime_origin"],
+        "app_user_model_id": result["app_user_model_id"],
+        "app_user_model_id_applied": result["app_user_model_id_applied"],
         "window_icon_applied": result["window_icon_applied"],
         "interaction_hash": result["interaction_hash"],
         "error": result["error"],

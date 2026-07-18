@@ -53,6 +53,9 @@ while ([DateTime]::UtcNow -lt $deadline) {
   try {
     $state = Get-Content -LiteralPath $runtimeState -Raw | ConvertFrom-Json
     if ($state.status -eq "window_ready") {
+      if ($state.app_user_model_id_applied -ne $true -or $state.window_icon_applied -ne $true) {
+        throw "Paneloom opened without its Windows application identity or native icon."
+      }
       $mode = if ($Offline) { "offline" } else { "online" }
       Write-Host "Paneloom desktop test window is ready in $mode mode on its private loopback service."
       exit 0

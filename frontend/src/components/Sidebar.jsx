@@ -16,7 +16,9 @@ export default function Sidebar({ activePage, onNavigate }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">PL</div>
+        <div className="brand-mark">
+          <img alt="" aria-hidden="true" src="/paneloom-icon.png" />
+        </div>
         <div>
           <h1>Paneloom</h1>
           <p>{t("appSubtitle")}</p>

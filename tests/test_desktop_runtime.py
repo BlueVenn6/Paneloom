@@ -6,6 +6,7 @@ from PIL import Image
 from backend.app.security import redact_sensitive_text
 from backend.app.routes import generation
 from desktop.launcher import (
+    APP_USER_MODEL_ID,
     DESKTOP_ICON,
     LocalDesktopServer,
     ROOT_DIR,
@@ -33,6 +34,9 @@ class DesktopRuntimeTests(unittest.TestCase):
                 runtime_url,
             )
         )
+
+    def test_windows_taskbar_identity_is_stable_and_not_the_python_executable(self):
+        self.assertEqual(APP_USER_MODEL_ID, "Paneloom.Desktop")
 
     def test_desktop_and_frontend_icons_share_the_transparent_project_asset(self):
         frontend_icon = ROOT_DIR / "frontend" / "public" / "paneloom-icon.png"
@@ -63,6 +67,10 @@ class DesktopRuntimeTests(unittest.TestCase):
             'href="/paneloom-icon.png"',
             frontend_html.read_text(encoding="utf-8"),
         )
+        sidebar = ROOT_DIR / "frontend" / "src" / "components" / "Sidebar.jsx"
+        sidebar_text = sidebar.read_text(encoding="utf-8")
+        self.assertIn('src="/paneloom-icon.png"', sidebar_text)
+        self.assertNotIn('className="brand-mark">PL', sidebar_text)
         self.assertIn(
             "authorize the artwork to be redistributed",
             icon_notice.read_text(encoding="utf-8"),
