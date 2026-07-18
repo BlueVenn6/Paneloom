@@ -37,6 +37,7 @@ class DesktopRuntimeTests(unittest.TestCase):
     def test_desktop_and_frontend_icons_share_the_transparent_project_asset(self):
         frontend_icon = ROOT_DIR / "frontend" / "public" / "paneloom-icon.png"
         frontend_html = ROOT_DIR / "frontend" / "index.html"
+        icon_notice = ROOT_DIR / "desktop" / "resources" / "README.md"
 
         with Image.open(DESKTOP_ICON) as desktop_icon:
             self.assertEqual(desktop_icon.format, "ICO")
@@ -61,6 +62,10 @@ class DesktopRuntimeTests(unittest.TestCase):
         self.assertIn(
             'href="/paneloom-icon.png"',
             frontend_html.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "authorize the artwork to be redistributed",
+            icon_notice.read_text(encoding="utf-8"),
         )
 
     def test_built_ui_and_api_share_random_loopback_server_and_stop(self):

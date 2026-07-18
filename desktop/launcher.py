@@ -27,6 +27,43 @@ class SingleInstanceError(RuntimeError):
     pass
 
 
+def _apply_windows_window_icon(window) -> bool:
+    """Apply the project icon to pywebview's native WinForms window."""
+    if os.name != "nt":
+        return False
+    if not DESKTOP_ICON.is_file():
+        raise FileNotFoundError(f"The desktop icon is missing: {DESKTOP_ICON}")
+
+    native_window = getattr(window, "native", None)
+    if native_window is None:
+        raise RuntimeError("The native Windows window is not ready for icon assignment.")
+
+    from System import Action
+    from System.Drawing import Icon
+
+    icon = Icon(str(DESKTOP_ICON))
+
+    def assign_icon() -> None:
+        native_window.Icon = icon
+
+    if native_window.InvokeRequired:
+        native_window.Invoke(Action(assign_icon))
+    else:
+        assign_icon()
+    window._paneloom_native_icon = icon
+    return native_window.Icon is not None
+
+
+def _dispose_windows_window_icon(window) -> None:
+    icon = getattr(window, "_paneloom_native_icon", None)
+    if icon is None:
+        return
+    try:
+        icon.Dispose()
+    finally:
+        window._paneloom_native_icon = None
+
+
 class WindowsSingleInstance:
     def __init__(self, name: str = MUTEX_NAME):
         self._handle = None
@@ -171,7 +208,23 @@ def run_window(port: int = 0) -> None:
             height=920,
             min_size=(1024, 700),
         )
-        window.events.shown += lambda: _write_runtime_state("window_ready", server.port)
+        icon_failure = []
+
+        def shown_window() -> None:
+            try:
+                icon_applied = _apply_windows_window_icon(window)
+            except Exception as exc:
+                icon_failure.append(str(exc))
+                _write_runtime_state("icon_failed", server.port, error=str(exc))
+                window.destroy()
+                return
+            _write_runtime_state(
+                "window_ready",
+                server.port,
+                window_icon_applied=icon_applied,
+            )
+
+        window.events.shown += shown_window
         webview.start(
             _monitor_frontend_runtime if test_mode else None,
             (window, frontend_log_path) if test_mode else None,
@@ -179,8 +232,10 @@ def run_window(port: int = 0) -> None:
             debug=False,
             private_mode=False,
             storage_path=str(APP_CACHE_DIR / "webview"),
-            icon=str(DESKTOP_ICON),
         )
+        _dispose_windows_window_icon(window)
+        if icon_failure:
+            raise RuntimeError(f"The native window icon could not be applied: {icon_failure[0]}")
     finally:
         forced_server_shutdown = server.stop()
         from backend.app.routes.generation import interrupt_active_jobs_for_desktop_shutdown
@@ -327,6 +382,7 @@ def window_smoke(port: int = 0) -> dict:
         "api_base_text": "",
         "api_requests": [],
         "all_api_requests_use_runtime_origin": False,
+        "window_icon_applied": False,
         "interaction_hash": "",
         "error": "",
     }
@@ -341,6 +397,10 @@ def window_smoke(port: int = 0) -> dict:
 
     def shown_window() -> None:
         timeline.setdefault("t3_window_shown", elapsed())
+        try:
+            result["window_icon_applied"] = _apply_windows_window_icon(window)
+        except Exception as exc:
+            result["error"] = str(exc)
 
     def closed_window() -> None:
         timeline.setdefault("t7_webview_closed", elapsed())
@@ -432,8 +492,8 @@ def window_smoke(port: int = 0) -> dict:
             debug=False,
             private_mode=False,
             storage_path=str(APP_CACHE_DIR / "webview-smoke"),
-            icon=str(DESKTOP_ICON),
         )
+        _dispose_windows_window_icon(window)
         timeline.setdefault("t7_webview_closed", elapsed())
     finally:
         server.stop()
@@ -444,6 +504,7 @@ def window_smoke(port: int = 0) -> dict:
             and result["root_rendered"]
             and result["interactive"]
             and result["all_api_requests_use_runtime_origin"]
+            and result["window_icon_applied"]
         ),
         "host": "127.0.0.1",
         "port": server.port,
@@ -455,6 +516,7 @@ def window_smoke(port: int = 0) -> dict:
         "api_base_text": result["api_base_text"],
         "api_requests": result["api_requests"],
         "all_api_requests_use_runtime_origin": result["all_api_requests_use_runtime_origin"],
+        "window_icon_applied": result["window_icon_applied"],
         "interaction_hash": result["interaction_hash"],
         "error": result["error"],
         "timeline_seconds": timeline,
