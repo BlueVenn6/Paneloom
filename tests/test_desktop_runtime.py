@@ -1,17 +1,68 @@
 import unittest
 from unittest.mock import patch
 
+from PIL import Image
+
 from backend.app.security import redact_sensitive_text
 from backend.app.routes import generation
 from desktop.launcher import (
+    DESKTOP_ICON,
     LocalDesktopServer,
+    ROOT_DIR,
     SingleInstanceError,
     WindowsSingleInstance,
+    _all_requests_use_runtime_origin,
     create_desktop_app,
 )
 
 
 class DesktopRuntimeTests(unittest.TestCase):
+    def test_runtime_origin_validation_uses_network_requests_not_hidden_debug_text(self):
+        runtime_url = "http://127.0.0.1:49152"
+        self.assertTrue(
+            _all_requests_use_runtime_origin(
+                [f"{runtime_url}/health", f"{runtime_url}/projects"],
+                runtime_url,
+                runtime_url,
+            )
+        )
+        self.assertFalse(
+            _all_requests_use_runtime_origin(
+                ["http://127.0.0.1:8000/projects"],
+                runtime_url,
+                runtime_url,
+            )
+        )
+
+    def test_desktop_and_frontend_icons_share_the_transparent_project_asset(self):
+        frontend_icon = ROOT_DIR / "frontend" / "public" / "paneloom-icon.png"
+        frontend_html = ROOT_DIR / "frontend" / "index.html"
+
+        with Image.open(DESKTOP_ICON) as desktop_icon:
+            self.assertEqual(desktop_icon.format, "ICO")
+            self.assertEqual(
+                desktop_icon.info.get("sizes"),
+                {
+                    (16, 16),
+                    (24, 24),
+                    (32, 32),
+                    (48, 48),
+                    (64, 64),
+                    (128, 128),
+                    (256, 256),
+                },
+            )
+
+        with Image.open(frontend_icon) as browser_icon:
+            self.assertEqual(browser_icon.mode, "RGBA")
+            self.assertEqual(browser_icon.size, (1024, 1024))
+            self.assertEqual(browser_icon.getpixel((0, 0))[3], 0)
+
+        self.assertIn(
+            'href="/paneloom-icon.png"',
+            frontend_html.read_text(encoding="utf-8"),
+        )
+
     def test_built_ui_and_api_share_random_loopback_server_and_stop(self):
         server = LocalDesktopServer(create_desktop_app())
         server.start()

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 _PROCESS_STARTED_MONOTONIC = time.monotonic()
 ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
+DESKTOP_ICON = ROOT_DIR / "desktop" / "resources" / "paneloom.ico"
 MUTEX_NAME = "Local\\PaneloomDesktopSingleInstance"
 ERROR_ALREADY_EXISTS = 183
 _HARD_EXIT_REQUIRED = False
@@ -178,6 +179,7 @@ def run_window(port: int = 0) -> None:
             debug=False,
             private_mode=False,
             storage_path=str(APP_CACHE_DIR / "webview"),
+            icon=str(DESKTOP_ICON),
         )
     finally:
         forced_server_shutdown = server.stop()
@@ -289,6 +291,17 @@ def _write_runtime_state(status: str, port: int, **details) -> None:
     temporary_path.replace(path)
 
 
+def _all_requests_use_runtime_origin(
+    requests: list[str], runtime_origin: str, server_url: str
+) -> bool:
+    runtime_prefix = f"{server_url}/"
+    return bool(
+        requests
+        and all(url.startswith(runtime_prefix) for url in requests)
+        and runtime_origin == server_url
+    )
+
+
 def window_smoke(port: int = 0) -> dict:
     try:
         import webview
@@ -358,7 +371,6 @@ def window_smoke(port: int = 0) -> dict:
                     and ui_state.get("backendOnline")
                     and ui_state.get("navReady")
                     and any(url.endswith("/projects") for url in ui_state.get("requests", []))
-                    and ui_state.get("apiBaseText")
                 ):
                     break
                 time.sleep(0.1)
@@ -368,12 +380,8 @@ def window_smoke(port: int = 0) -> dict:
             result["runtime_origin"] = str(ui_state.get("origin") or "")
             result["api_base_text"] = str(ui_state.get("apiBaseText") or "")
             result["api_requests"] = list(ui_state.get("requests") or [])
-            runtime_prefix = f"{server.url}/"
-            result["all_api_requests_use_runtime_origin"] = bool(
-                result["api_requests"]
-                and all(url.startswith(runtime_prefix) for url in result["api_requests"])
-                and result["api_base_text"] == server.url
-                and result["runtime_origin"] == server.url
+            result["all_api_requests_use_runtime_origin"] = _all_requests_use_runtime_origin(
+                result["api_requests"], result["runtime_origin"], server.url
             )
 
             clicked = bool(
@@ -424,6 +432,7 @@ def window_smoke(port: int = 0) -> dict:
             debug=False,
             private_mode=False,
             storage_path=str(APP_CACHE_DIR / "webview-smoke"),
+            icon=str(DESKTOP_ICON),
         )
         timeline.setdefault("t7_webview_closed", elapsed())
     finally:
