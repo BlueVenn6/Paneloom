@@ -18,7 +18,7 @@ PACKAGING_ALLOWED = NO
 FINAL_DISTRIBUTION_ARTIFACT_VALIDATED = NO
 ```
 
-Paneloom 已经具备较好的本地桌面 Beta 源码基础，核心项目、生成、版本、锁定、导出、迁移、备份和离线流程都有自动化证据。但是当前锁定的 Python 依赖存在已知安全漏洞，新增图标尚缺少适合公开仓库的版权/许可来源声明，仓库也没有 CI、稳定的静态检查命令和安全报告入口。因此不应现在公开宣称“已达到开源交付标准”。
+Paneloom 已经具备较好的本地桌面 Beta 源码基础，核心项目、生成、版本、锁定、导出、迁移、备份和离线流程都有自动化证据。但是当前锁定的 Python 依赖存在已知安全漏洞，仓库也没有 CI、稳定的静态检查命令和安全报告入口。因此不应现在公开宣称“已达到开源交付标准”。
 
 本轮没有制作安装包、Release 或正式发行物。
 
@@ -31,6 +31,7 @@ Paneloom 已经具备较好的本地桌面 Beta 源码基础，核心项目、�
 | 本轮开始 HEAD | `fd13633f5f5e0717b974018c6645a913cab62423` |
 | 本轮开始工作区 | 干净 |
 | 图标接入 commit | `afdd6d20c96837fd92dafadae62e3065f998006a` |
+| Windows 原生图标显示修复 commit | `e9f29cb71783d881708f360108cd2de8a61402d5` |
 | 生产前端输入 | `frontend/index.html`、`frontend/src/`、`frontend/public/` |
 | 生产前端输出 | `frontend/dist/` |
 | 桌面运行入口 | `desktop/launcher.py` |
@@ -72,16 +73,16 @@ frontend/index.html + frontend/src + frontend/public
 - 地球主体 alpha 边界为 `(86, 84, 938, 939)`，约占 1024 画布的 84%。
 - 没有外加方形底板、描边、圆角容器或阴影。
 - ICO 包含 16、24、32、48、64、128、256 像素尺寸。
-- pywebview 正常窗口和窗口烟测都使用同一 `paneloom.ico`。
+- pywebview 的 Windows WinForms 原生窗口和窗口烟测都将同一 `paneloom.ico` 设置为 `Form.Icon`。
 - Vite production build 中的 `paneloom-icon.png` 与项目标准 PNG 哈希一致。
 
-开源前仍需项目所有者确认：该图标是否为原创或已获得可在 MIT 开源仓库中再分发的许可。当前“用户提供并允许本项目使用”足以完成本地接入，但不足以替代公开发行所需的来源记录。
+项目所有者已于 2026-07-18 确认：该图标由 AI 生成，项目所有者拥有必要使用权并授权其随 Paneloom 按项目 MIT License 再分发。授权说明记录在 `desktop/resources/README.md`。
 
 ## 4. 本轮修改
 
 | 文件 | 原因 |
 |---|---|
-| `desktop/launcher.py` | 让 pywebview/WebView2 使用项目 ICO；修正已经过时的动态端口烟测断言 |
+| `desktop/launcher.py` | 将项目 ICO 设置到 pywebview 的 Windows WinForms 原生窗口；修正已经过时的动态端口烟测断言 |
 | `frontend/index.html` | 引用项目 favicon |
 | `frontend/public/paneloom-icon.png` | 让 Vite 生产构建包含同一图标 |
 | `desktop/resources/*` | 保存原图、标准 PNG 和 Windows ICO |
@@ -98,9 +99,10 @@ frontend/index.html + frontend/src + frontend/public
 | 图标专项 unittest | PASS | 6/6 |
 | Vite production build | PASS | Vite 8.1.3，1740 modules，1.70 秒 |
 | production-like WebView2 smoke | PASS | production build 真实加载并可导航 |
+| Windows 原生窗口图标 | PASS | `window_icon_applied=true`，WinForms `Form.Icon` 已设置 |
 | 动态 API 端点 | PASS | `/health`、`/projects` 全部使用 `http://127.0.0.1:54900` |
-| WebView2 首次交互 | PASS | 22.891 秒 |
-| 完整烟测退出 | PASS | 24.047 秒 |
+| WebView2 首次交互 | PASS | 6.625 秒（原生图标修复后的最新 smoke） |
+| 完整烟测退出 | PASS | 7.016 秒（原生图标修复后的最新 smoke） |
 | 后端停止 | PASS | `server_stopped=true` |
 | 监听端口残留 | PASS | 0 |
 | `git diff --check` | PASS | 无空白错误 |
@@ -170,11 +172,11 @@ production build 关键输出：
 | 源码与构建可追溯性 | 84/100 | Git 基线清晰，production build 哈希可记录；尚无正式打包链和运行版本标识 |
 | 安全与隐私 | 55/100 | 密钥与用户数据隔离良好，但 Python 依赖存在已知漏洞且无 SECURITY/自动扫描 |
 | 文档与可复现性 | 68/100 | 基础文档完整，但存在失真配置和过时贡献命令，没有 CI |
-| 开源法律与资产 | 70/100 | MIT 清晰，直接依赖许可证宽松；图标来源/再许可声明待确认 |
+| 开源法律与资产 | 85/100 | MIT 清晰，直接依赖许可证宽松，图标来源与再分发授权已记录 |
 | 社区与维护治理 | 52/100 | 缺少安全渠道、CI、模板、变更日志和版本策略 |
 
 ```text
-OPEN_SOURCE_DELIVERY_READINESS_SCORE = 69 / 100
+OPEN_SOURCE_DELIVERY_READINESS_SCORE = 71 / 100
 ```
 
 ## 9. 优先级与优化方向
@@ -184,8 +186,7 @@ OPEN_SOURCE_DELIVERY_READINESS_SCORE = 69 / 100
 1. 建立独立依赖升级分支，升级 `python-multipart`、Pillow，并选择兼容的新 FastAPI/Starlette 组合。
 2. 升级后重新运行 54 个测试、Vite production build、production-like WebView2 smoke、离线和文件上传回归。
 3. 重新运行 `pip-audit`，结果必须为 0 个未接受的已知漏洞；如果某项无法升级，必须有明确风险接受和影响说明。
-4. 由项目所有者确认地球图标为原创或具有公开再分发权，并在 `desktop/resources/README.md` 或 `NOTICE` 中记录来源和许可。
-5. 用户本人继续完成功能验收；在明确批准前保持 `PACKAGING_ALLOWED=NO`。
+4. 用户本人继续完成功能验收；在明确批准前保持 `PACKAGING_ALLOWED=NO`。
 
 ### P1：首个公开源码版本前应完成
 
@@ -215,7 +216,7 @@ FULL_AUTOMATED_REGRESSION = PASS
 PRODUCTION_BUILD = PASS
 PRODUCTION_LIKE_DESKTOP_SMOKE = PASS
 ICON_RUNTIME_INTEGRATION = PASS
-ICON_PUBLIC_LICENSE_PROVENANCE = PENDING
+ICON_PUBLIC_LICENSE_PROVENANCE = PASS
 CI_AVAILABLE = NO
 USER_MANUAL_FUNCTIONAL_ACCEPTANCE = PENDING
 OPEN_SOURCE_DELIVERY_READY = NO
