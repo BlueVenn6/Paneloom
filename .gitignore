@@ -17,6 +17,10 @@ __pycache__/
 node_modules/
 dist/
 build/
+artifacts/
+packaging/cache/
+packaging/generated/
+packaging/work/
 coverage/
 htmlcov/
 .coverage
