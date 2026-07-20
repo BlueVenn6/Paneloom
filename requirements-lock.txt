@@ -15,7 +15,7 @@ cyclonedx-python-lib==11.11.0
 defusedxml==0.7.1
 et_xmlfile==2.0.0
 fastapi==0.139.2
-filelock==3.31.0
+filelock==3.31.1
 h11==0.16.0
 idna==3.18
 license-expression==30.4.4
