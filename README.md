@@ -8,7 +8,9 @@ Licensed under the MIT License.
 
 ## Current Status
 
-Early preview / local desktop beta architecture. Self-contained project folders, legacy migration, backup/restore, offline local editing, and the production-like pywebview/WebView2 runtime are validated. No installer or release is provided; packaging remains a separate, explicitly gated phase.
+Local desktop beta. Self-contained project folders, legacy migration, backup/restore, offline local editing, and the pywebview/WebView2 runtime are validated. A traceable unsigned Windows Beta installer has been built and exercised on the development Windows 11 machine. The binary is not committed to this repository and has not been validated on an independent clean Windows machine.
+
+The frozen business source is `v0.1.0-beta.1-functional-baseline`. The open-source release line adds only packaging and release-compliance material; `release-source.json` records both immutable source identities. WEBTOON/Tapas submission-package work belongs to a later feature branch and is not part of this release.
 
 ## What It Does
 
@@ -91,7 +93,7 @@ cd ..
 .\scripts\start_desktop_prototype.ps1
 ```
 
-The prototype uses pywebview/WebView2, serves the production React build and FastAPI API from one random `127.0.0.1` port, prevents duplicate instances, and closes the local service with the window. It is architecture validation, not an installer or release.
+The prototype uses pywebview/WebView2, serves the production React build and FastAPI API from one random `127.0.0.1` port, prevents duplicate instances, and closes the local service with the window.
 
 Production-like desktop validation, using the built Vite application without a dev server:
 
@@ -100,6 +102,19 @@ Production-like desktop validation, using the built Vite application without a d
 ```
 
 This entry starts the native window and local backend automatically. It still depends on the prepared developer runtime in `.desktop-venv` and therefore is not an end-user distribution package.
+
+## Windows Beta Packaging
+
+The reproducible Windows packaging path is documented in `packaging/README.md`. It requires a clean worktree and refuses business-source changes relative to the frozen functional tag.
+
+```powershell
+python -m venv .desktop-venv
+.\.desktop-venv\Scripts\python.exe -m pip install --upgrade pip==26.1.2
+.\.desktop-venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+.\scripts\build_windows_installer.ps1
+```
+
+The installer is currently unsigned. Do not remove SmartScreen warnings or describe it as a signed production release. The exact locally validated Beta artifact identity is recorded in `docs/windows_installer_validation_2026-07-20.md`.
 
 ## Quick Start: 10-Minute First Run
 
@@ -225,7 +240,7 @@ cloud AI is offline.
 ## Verification
 
 ```powershell
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements-lock.txt
 python -m ruff check backend api desktop scripts tests
 python -m compileall backend api desktop scripts
 python -m unittest discover -s tests -p "test_*.py" -v
@@ -238,6 +253,31 @@ cd ..
 python -m pip_audit -r backend\requirements.txt --progress-spinner off
 ```
 
+## Supply Chain And Third-party Licenses
+
+- `sbom/python-runtime.cdx.json`: Python runtime dependency closure.
+- `sbom/python-build.cdx.json`: exact Python build/test environment used for the Beta installer.
+- `sbom/frontend.cdx.json`: frontend lock-file dependency graph.
+- `THIRD_PARTY_LICENSES.md`: full transitive inventory plus license texts shipped with the binary.
+- `THIRD_PARTY_NOTICES.md`: direct and externally bundled tool notices.
+
+Regenerate Python metadata and the combined inventory from the exact prepared environment:
+
+```powershell
+.\.desktop-venv\Scripts\python.exe scripts\generate_release_metadata.py `
+  --node-modules frontend\node_modules
+```
+
+Regenerate the frontend CycloneDX document from the lock file:
+
+```powershell
+cd frontend
+npm sbom --package-lock-only --sbom-format cyclonedx --sbom-type application |
+  Set-Content -Encoding utf8 ..\sbom\frontend.cdx.json
+```
+
+Review generated changes before committing. Dependency metadata is evidence, not a substitute for legal review.
+
 ## License
 
-Paneloom is licensed under the MIT License. See `LICENSE`.
+Paneloom is licensed under the MIT License. See `LICENSE`. The user-supplied globe icon redistribution grant is recorded in `desktop/resources/README.md`; third-party terms are listed in `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.md`.

@@ -12,6 +12,9 @@ datas = [
     (str(ROOT / "VERSION"), "."),
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
+    (str(ROOT / "THIRD_PARTY_LICENSES.md"), "."),
+    (str(ROOT / "sbom"), "sbom"),
+    (str(ROOT / "packaging" / "licenses"), "packaging/licenses"),
     (str(GENERATED / "build-info.json"), "."),
 ]
 datas += collect_data_files("webview")

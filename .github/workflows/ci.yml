@@ -20,12 +20,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements-lock.txt
 
       - uses: actions/setup-node@v4
         with:
@@ -36,11 +38,16 @@ jobs:
       - name: Install Python verification environment
         run: |
           python -m pip install --upgrade pip==26.1.2
-          python -m pip install -r requirements-dev.txt
+          python -m pip install -r requirements-lock.txt
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Verify release SBOM and license inventory
+        run: |
+          python scripts/generate_release_metadata.py --node-modules frontend/node_modules
+          git diff --exit-code -- THIRD_PARTY_LICENSES.md sbom/python-build.cdx.json sbom/python-runtime.cdx.json
 
       - name: Check repository hygiene
         run: python scripts/check_repository_hygiene.py

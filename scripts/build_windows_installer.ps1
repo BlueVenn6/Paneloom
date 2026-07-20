@@ -50,12 +50,37 @@ $baselineCommit = (git rev-list -n 1 $BaselineTag).Trim()
 if (-not $baselineCommit) {
   throw "The frozen baseline tag does not exist: $BaselineTag"
 }
+$releaseSource = Get-Content -LiteralPath (Join-Path $root "release-source.json") -Raw | ConvertFrom-Json
+if ($releaseSource.frozen_business_tag -ne $BaselineTag -or
+    $releaseSource.frozen_business_commit -ne $baselineCommit) {
+  throw "release-source.json does not match the frozen business tag."
+}
+$packagingSourceTagCommit = (git rev-list -n 1 $releaseSource.packaging_source_tag).Trim()
+if (-not $packagingSourceTagCommit -or
+    $packagingSourceTagCommit -ne $releaseSource.packaging_source_commit) {
+  throw "The packaging source tag does not match release-source.json."
+}
+git merge-base --is-ancestor $releaseSource.packaging_source_commit $packagingCommit
+if ($LASTEXITCODE -ne 0) {
+  throw "The recorded packaging source is not an ancestor of the current release commit."
+}
 
 $allowedChanges = @(
   ".gitignore",
+  ".github/workflows/ci.yml",
+  "CHANGELOG.md",
+  "README.md",
+  "THIRD_PARTY_LICENSES.md",
+  "THIRD_PARTY_NOTICES.md",
+  "docs/open_source_release_readiness_2026-07-20.md",
+  "docs/windows_installer_validation_2026-07-20.md",
   "packaging/",
+  "release-source.json",
   "requirements-build.txt",
-  "scripts/build_windows_installer.ps1"
+  "requirements-lock.txt",
+  "sbom/",
+  "scripts/build_windows_installer.ps1",
+  "scripts/generate_release_metadata.py"
 )
 $unexpected = @(
   git diff --name-only "$baselineCommit..$packagingCommit" |
@@ -93,7 +118,10 @@ $buildInfo = [ordered]@{
   version = $version
   baseline_tag = $BaselineTag
   baseline_commit = $baselineCommit
+  packaging_source_tag = $releaseSource.packaging_source_tag
+  packaging_source_commit = $releaseSource.packaging_source_commit
   packaging_commit = $packagingCommit
+  open_source_tag = $releaseSource.open_source_tag
   built_at_utc = $buildTime
   python = (& $python --version 2>&1).ToString()
   pyinstaller = (& $python -m PyInstaller --version).Trim()
@@ -122,7 +150,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $stage "Paneloom.exe"))) {
   throw "PyInstaller did not create the expected Paneloom.exe."
 }
 
-$installerPath = Join-Path $installerDir "Paneloom-$version-Windows-x64-Setup.exe"
+$installerPath = Join-Path $installerDir "Paneloom-$version-OpenSource-Windows-x64-Setup.exe"
 Invoke-Step "NSIS installer" {
   & $nsisCompiler `
     "/INPUTCHARSET" `
@@ -140,14 +168,37 @@ if (-not $installer) {
   throw "NSIS did not create an installer."
 }
 $application = Get-Item -LiteralPath (Join-Path $stage "Paneloom.exe")
+$releaseEvidencePaths = @(
+  "THIRD_PARTY_LICENSES.md",
+  "THIRD_PARTY_NOTICES.md",
+  "sbom/frontend.cdx.json",
+  "sbom/python-build.cdx.json",
+  "sbom/python-runtime.cdx.json"
+)
+$releaseEvidence = foreach ($relativePath in $releaseEvidencePaths) {
+  $evidencePath = Join-Path $root $relativePath
+  if (-not (Test-Path -LiteralPath $evidencePath)) {
+    throw "Release evidence is missing: $relativePath"
+  }
+  $evidence = Get-Item -LiteralPath $evidencePath
+  [ordered]@{
+    path = $relativePath.Replace("\", "/")
+    size = $evidence.Length
+    sha256 = (Get-FileHash -LiteralPath $evidence.FullName -Algorithm SHA256).Hash
+  }
+}
 $manifest = [ordered]@{
   product = "Paneloom"
   version = $version
   baseline_tag = $BaselineTag
   baseline_commit = $baselineCommit
+  packaging_source_tag = $releaseSource.packaging_source_tag
+  packaging_source_commit = $releaseSource.packaging_source_commit
   packaging_commit = $packagingCommit
+  open_source_tag = $releaseSource.open_source_tag
   built_at_utc = $buildTime
   signed = $false
+  release_evidence = $releaseEvidence
   webview2_bootstrapper = [ordered]@{
     source = $webViewUrl
     signer = $signature.SignerCertificate.Subject

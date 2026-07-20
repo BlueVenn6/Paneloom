@@ -11,4 +11,4 @@ All notable changes to Paneloom are recorded here.
 - Added the Paneloom globe icon, Windows taskbar identity, and native window icon handling.
 - Added frontend and Python lint, dependency auditing, repository hygiene checks, and CI preparation.
 
-This is a source and local desktop beta. It is not a packaged public release.
+This is a local desktop beta. A traceable unsigned Windows Beta installer was validated on the development Windows 11 machine. The open-source release metadata includes CycloneDX SBOMs and the complete transitive dependency license inventory; code signing, remote CI execution, and an independent clean-machine test remain external release gates.

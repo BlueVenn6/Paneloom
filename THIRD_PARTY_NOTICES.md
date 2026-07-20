@@ -34,6 +34,15 @@ notices and license texts.
 | React Refresh ESLint plugin | MIT |
 | globals | MIT |
 
-This summary covers direct dependencies pinned by this repository. A public
-binary release should generate and archive the complete transitive dependency
-license inventory from the exact packaged environment.
+## Packaging and external runtime components
+
+| Component | Terms |
+|---|---|
+| PyInstaller 6.20.0 | GPL-2.0-or-later with the PyInstaller bootloader exception; full text is included in `THIRD_PARTY_LICENSES.md`. |
+| NSIS 3.12 | zlib/libpng-style license; the compiler's `COPYING` file is included at `packaging/licenses/NSIS-COPYING.txt`. |
+| Microsoft Edge WebView2 Runtime | Microsoft redistribution terms apply. The installer embeds the Microsoft-signed Evergreen Bootstrapper and records its source, signer, and SHA-256 in the build manifest. |
+
+The complete Python and npm transitive inventory is generated in
+`THIRD_PARTY_LICENSES.md`. Machine-readable CycloneDX documents are under
+`sbom/`. These files describe the exact frozen Beta environment; dependencies
+retain their own copyright and license terms.
