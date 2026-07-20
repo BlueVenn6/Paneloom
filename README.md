@@ -1,10 +1,14 @@
 # Paneloom / 格织
 
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
+
 Paneloom is a Windows-local-first, single-user desktop creation tool for turning scripts into consistent comic panels with project assets, shot versions, approval locks, exports, and creator feedback loops.
 
 Paneloom is not bundled with free model quota. You bring your own API key and choose the text, vision, and image models that fit your workflow.
 
 Licensed under the MIT License.
+
+![Paneloom dashboard in English](docs/screenshots/en-dashboard.png)
 
 ## Current Status
 
@@ -141,16 +145,17 @@ generated assets.
 
 ## Screenshots
 
-Screenshots should be prepared before a public GitHub release. Recommended
-views:
+The repository includes real production-build dashboard captures for every
+documented interface language:
 
-- Dashboard
-- Storyboard
-- Asset Library
-- Feedback Review
+- [Simplified Chinese](docs/screenshots/zh-CN-dashboard.png)
+- [English](docs/screenshots/en-dashboard.png)
+- [Japanese](docs/screenshots/ja-dashboard.png)
+- [Korean](docs/screenshots/ko-dashboard.png)
 
-This repository does not include placeholder screenshots or generated fake UI
-captures.
+They are generated against an empty isolated data directory by
+`scripts/capture_readme_screenshots.py`. They contain no private projects,
+API keys, placeholder mock results, or user assets.
 
 ## Environment Variables
 

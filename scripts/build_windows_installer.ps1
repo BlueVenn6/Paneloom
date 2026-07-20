@@ -70,9 +70,14 @@ $allowedChanges = @(
   ".github/workflows/ci.yml",
   "CHANGELOG.md",
   "README.md",
+  "README.en.md",
+  "README.ja.md",
+  "README.ko.md",
+  "README.zh-CN.md",
   "THIRD_PARTY_LICENSES.md",
   "THIRD_PARTY_NOTICES.md",
   "docs/open_source_release_readiness_2026-07-20.md",
+  "docs/screenshots/",
   "docs/windows_installer_validation_2026-07-20.md",
   "packaging/",
   "release-source.json",
@@ -80,6 +85,7 @@ $allowedChanges = @(
   "requirements-lock.txt",
   "sbom/",
   "scripts/build_windows_installer.ps1",
+  "scripts/capture_readme_screenshots.py",
   "scripts/generate_release_metadata.py"
 )
 $unexpected = @(
