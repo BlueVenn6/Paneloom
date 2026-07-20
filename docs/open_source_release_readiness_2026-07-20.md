@@ -8,14 +8,14 @@ Paneloom 0.1.0-beta.1 的冻结业务源码已具备公开仓库所需的基础�
 
 ```text
 SOURCE_OPEN_SOURCE_READY = YES
-PUBLIC_SOURCE_PUBLISHED = NO
-REMOTE_CI_EXECUTED = NO
+PUBLIC_SOURCE_PUBLISHED = YES
+REMOTE_CI_EXECUTED = PASS
 CLEAN_MACHINE_INSTALLER_VALIDATION = NOT_RUN
 AUTHENTICODE_SIGNED = NO
 SIGNED_BINARY_RELEASE_READY = NO
 ```
 
-`SOURCE_OPEN_SOURCE_READY = YES` 只表示源码可以进入首次公开推送流程。它不表示当前未签名安装器已经满足正式二进制发行标准。
+源码已发布到 `https://github.com/BlueVenn6/Paneloom`。`SOURCE_OPEN_SOURCE_READY = YES` 不表示当前未签名安装器已经满足正式二进制发行标准。
 
 ## 2. 源码身份
 
@@ -89,27 +89,34 @@ MIT `LICENSE`、README、贡献指南、行为准则、安全政策和密钥/用
 | `THIRD_PARTY_LICENSES.md` | `DB92B96C53543D593394CC117F068C566C639FB1F4FDA579197A382460C78FD0` |
 | `packaging/licenses/NSIS-COPYING.txt` | `4B7AFCAFF275686C674620360908E5A3907C23433FDEED985AE6A078B9FB8B20` |
 
-最终提交和源码归档生成后应另外记录 commit、归档路径、文件大小、时间戳和 SHA-256。
+公开仓库 `main` 已通过 GitHub Windows CI。安装器对应的开源标签仍固定在 `7f0a6abc21bbb02f9fb68d8e45b2416143f76316`；四语 README、真实截图和 CI 修复位于后续纯仓库材料提交中，不改变冻结业务源码或既有安装器。
 
-## 6. 尚需外部完成的事项
+## 6. 公开仓库与远程 CI
 
-1. 由仓库所有者创建或确认公开远程仓库，并明确授权首次推送。
-2. 首次推送后查看远程 CI，确认公开环境中的 Windows job 真实通过。
-3. 使用独立、干净的 Windows 10/11 机器安装并运行本轮确切安装器。
-4. 正式二进制发行前取得 Authenticode 代码签名证书，对应用和安装器签名并验证签名链。
-5. 对最终公开说明、品牌素材及第三方许可清单进行一次发布者复核；必要时进行法律审阅。
+- 公开仓库：`https://github.com/BlueVenn6/Paneloom`
+- 远程验证 commit：`bc2fd4141ed1f0c3430697dcb1c694383687e547`
+- 成功 workflow：`https://github.com/BlueVenn6/Paneloom/actions/runs/29731123755`
+- Windows job：所有安装、SBOM、仓库安全、lint、编译、Vite build、56 项测试、依赖审计和 production runtime smoke 步骤均为 `success`。
 
-这些事项无法由当前无远程地址、无代码签名证书、无独立干净机的本地环境替代完成。
+首次 CI 暴露并修复了两个只在干净 runner 出现的问题：job 级别错误使用 `runner.temp`，以及桌面测试早于 Vite production build。修复后使用新 commit 完整重跑通过，没有删除或弱化测试。
 
-## 7. 发布边界
+## 7. 尚需外部完成的事项
 
-- 可以创建本地 commit、本地不可移动标签和可追溯源码归档。
-- 未获得远程地址与明确授权前，不推送 GitHub，不创建公开 Release。
+1. 使用独立、干净的 Windows 10/11 机器安装并运行本轮确切安装器。
+2. 正式二进制发行前取得 Authenticode 代码签名证书，对应用和安装器签名并验证签名链。
+3. 对最终公开说明、品牌素材及第三方许可清单进行一次发布者复核；必要时进行法律审阅。
+
+这些事项无法由当前无代码签名证书、无独立干净机的本地环境替代完成。
+
+## 8. 发布边界
+
+- 公开源码、不可移动标签和可追溯源码归档已经建立。
+- 尚未创建 GitHub Release，也没有把未签名安装器描述为正式发行物。
 - 当前未签名安装器只能作为明确标识的 Beta 测试包；不作为签名后的正式公开二进制发行物。
 - 后续 WEBTOON/Tapas 投稿包属于冻结基线之后的功能，不进入 `0.1.0-beta.1` 开源冻结版本。
 
-## 8. 验证等级
+## 9. 验证等级
 
-当前源码验证达到 **State B**：源码级检查、自动测试和 production-like 桌面运行验证已通过。
+公开源码及远程 CI 已验证。与 `v0.1.0-beta.1-open-source` 对应的本地安装器产物处于 **State C**：唯一产物、哈希、构建来源和打包后应用运行已经确认。
 
-只有在从最终开源标签重新构建唯一安装器、记录哈希并真实运行该确切产物后，才能提升到 State C；只有独立环境按目标场景完成最终交付物验收后，才可称为 State D。
+只有独立环境安装该确切安装器并按目标场景完成最终交付物验收后，才可称为 State D。
