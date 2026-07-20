@@ -2,11 +2,18 @@
 
 **English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
+[![Windows CI](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
+![Release](https://img.shields.io/badge/release-beta-orange)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Paneloom is a Windows-local-first, single-user desktop creation tool for turning scripts into consistent comic panels with project assets, shot versions, approval locks, exports, and creator feedback loops.
 
 Paneloom is not bundled with free model quota. You bring your own API key and choose the text, vision, and image models that fit your workflow.
 
 Licensed under the MIT License.
+
+**Topics:** AI comics · storyboard · manga · anime · visual continuity · local-first · Windows desktop · image generation · FastAPI · React · pywebview
 
 ![Paneloom dashboard in English](docs/screenshots/en-dashboard.png)
 

@@ -2,7 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | **日本語** | [한국어](README.ko.md)
 
+[![Windows CI](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
+![Release](https://img.shields.io/badge/release-beta-orange)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Paneloom は、Windows ローカル優先・一人用の AI 漫画／アニメ絵コンテ制作デスクトップツールです。脚本、キャラクターとロケーションの参照素材、ビジュアルスタイル、絵コンテ、画像バージョン、ショットの承認とロック、書き出し、制作レビューを、移動可能な一つのローカルプロジェクトにまとめます。
+
+**キーワード：** AI 漫画 · 絵コンテ · 漫画制作 · ビジュアル一貫性 · ローカル優先 · Windows デスクトップ · 画像生成 · FastAPI · React · pywebview
 
 ![Paneloom 日本語ダッシュボード](docs/screenshots/ja-dashboard.png)
 

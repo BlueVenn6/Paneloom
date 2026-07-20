@@ -2,7 +2,14 @@
 
 [English](README.md) | **简体中文** | [日本語](README.ja.md) | [한국어](README.ko.md)
 
+[![Windows CI](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
+![Release](https://img.shields.io/badge/release-beta-orange)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Paneloom 是一款 Windows 本地优先、面向单人创作者的 AI 漫画与动漫分镜桌面工具。它把剧本、角色与场景参考资产、视觉风格、分镜、图片版本、镜头锁定、导出和创作复盘组织在同一个可移动的本地项目中。
+
+**关键词：** AI 漫画 · 动漫分镜 · 漫画创作 · 视觉连续性 · 本地优先 · Windows 桌面工具 · 图片生成 · FastAPI · React · pywebview
 
 ![Paneloom 简体中文总览](docs/screenshots/zh-CN-dashboard.png)
 

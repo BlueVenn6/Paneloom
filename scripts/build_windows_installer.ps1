@@ -67,6 +67,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $allowedChanges = @(
   ".gitignore",
+  ".github/CODEOWNERS",
   ".github/workflows/ci.yml",
   "CHANGELOG.md",
   "README.md",

@@ -2,7 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | **한국어**
 
+[![Windows CI](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BlueVenn6/Paneloom/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D4)
+![Release](https://img.shields.io/badge/release-beta-orange)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Paneloom은 Windows 로컬 우선 방식으로 동작하는 1인 창작자용 AI 만화·애니메이션 콘티 데스크톱 도구입니다. 대본, 캐릭터와 장소 참고 자산, 시각 스타일, 콘티, 이미지 버전, 컷 승인과 잠금, 내보내기, 제작 회고를 이동 가능한 하나의 로컬 프로젝트에 정리합니다.
+
+**키워드:** AI 만화 · 콘티 · 만화 제작 · 시각적 일관성 · 로컬 우선 · Windows 데스크톱 · 이미지 생성 · FastAPI · React · pywebview
 
 ![Paneloom 한국어 대시보드](docs/screenshots/ko-dashboard.png)
 
