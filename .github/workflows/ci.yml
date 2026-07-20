@@ -66,12 +66,12 @@ jobs:
       - name: Compile Python
         run: python -m compileall backend api desktop scripts
 
-      - name: Run automated workflows
-        run: python -m unittest discover -s tests -p "test_*.py" -v
-
       - name: Check frontend and production build
         working-directory: frontend
         run: npm run check
+
+      - name: Run automated workflows
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Audit frontend dependencies
         working-directory: frontend
