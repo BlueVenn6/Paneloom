@@ -2,7 +2,11 @@ name: verify
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -15,8 +19,6 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
-    env:
-      PANELOOM_APP_DATA_DIR: ${{ runner.temp }}\PaneloomCI
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +36,12 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure isolated runtime paths
+        shell: pwsh
+        run: |
+          "PANELOOM_APP_DATA_DIR=$env:RUNNER_TEMP\PaneloomCI" >> $env:GITHUB_ENV
+          "PANELOOM_PROJECTS_HOME=$env:RUNNER_TEMP\PaneloomProjects" >> $env:GITHUB_ENV
 
       - name: Install Python verification environment
         run: |
