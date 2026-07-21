@@ -1,7 +1,7 @@
 # Paneloom third-party license inventory
 
 This file is generated from the exact Python build environment and frontend lock file.
-Source commit: `d34d148152f63846bc42fec083b20b3cd29da563`
+Source commit: `bb191af22e55076fd6c09a04727d790ed7fa99ed`
 
 It is a distribution inventory, not legal advice. Package authors retain their rights.
 

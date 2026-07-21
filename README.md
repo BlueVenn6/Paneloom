@@ -21,7 +21,7 @@ Licensed under the MIT License.
 
 Local desktop beta. Self-contained project folders, legacy migration, backup/restore, offline local editing, and the pywebview/WebView2 runtime are validated. A traceable unsigned Windows Beta installer has been built and exercised on the development Windows 11 machine. The binary is not committed to this repository and has not been validated on an independent clean Windows machine.
 
-The frozen business source is `v0.1.0-beta.1-functional-baseline`. The open-source release line adds only packaging and release-compliance material; `release-source.json` records both immutable source identities. WEBTOON/Tapas submission-package work belongs to a later feature branch and is not part of this release.
+The current security-maintenance source is frozen at `v0.1.0-beta.2-functional-baseline`. The release line adds only versioned packaging and release-compliance material after that point; `release-source.json` records the immutable source identities. WEBTOON/Tapas submission-package work belongs to a separate later feature branch and is not part of this release.
 
 ## What It Does
 

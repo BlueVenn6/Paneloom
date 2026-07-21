@@ -2,24 +2,24 @@
   "$schema": "https://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:d8368f9a-3ab8-5cde-a39d-d32a92f632a9",
+  "serialNumber": "urn:uuid:3761bb18-7345-54a6-a099-471ab56c6c4b",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-20T12:46:20+08:00",
+    "timestamp": "2026-07-21T12:11:36+08:00",
     "component": {
       "type": "application",
-      "bom-ref": "pkg:generic/paneloom@0.1.0-beta.1",
+      "bom-ref": "pkg:generic/paneloom@0.1.0-beta.2",
       "name": "Paneloom",
-      "version": "0.1.0-beta.1"
+      "version": "0.1.0-beta.2"
     },
     "properties": [
       {
         "name": "paneloom:source-commit",
-        "value": "d34d148152f63846bc42fec083b20b3cd29da563"
+        "value": "bb191af22e55076fd6c09a04727d790ed7fa99ed"
       },
       {
         "name": "paneloom:frozen-business-commit",
-        "value": "09fe927ffde5d1775adc0f7904da021932ecf143"
+        "value": "bb191af22e55076fd6c09a04727d790ed7fa99ed"
       },
       {
         "name": "paneloom:python-scope",
@@ -863,7 +863,7 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:generic/paneloom@0.1.0-beta.1",
+      "ref": "pkg:generic/paneloom@0.1.0-beta.2",
       "dependsOn": [
         "pkg:pypi/fastapi@0.139.2",
         "pkg:pypi/openpyxl@3.1.5",

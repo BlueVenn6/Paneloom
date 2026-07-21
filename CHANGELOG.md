@@ -2,6 +2,16 @@
 
 All notable changes to Paneloom are recorded here.
 
+## 0.1.0-beta.2 - 2026-07-21
+
+- Constrained project creation, opening, migration, backup, restore, image, and reference paths to approved local roots.
+- Added native desktop path authorization for user-selected locations and server-generated identifiers for new local resources.
+- Prevented absolute-path and traversal inputs from escaping project storage boundaries.
+- Hardened review-period file access, repository hygiene checks, GitHub Actions permissions, dependency review, and CodeQL scanning.
+- Added path-security regression tests while preserving existing self-contained project and desktop workflows.
+
+This is an unsigned security maintenance Beta. It supersedes `0.1.0-beta.1` for public testing but remains a pre-release and still requires an independent clean-machine test before a signed stable release.
+
 ## 0.1.0-beta.1 - 2026-07-18
 
 - Added a self-contained, movable local project structure with backup and restore.
