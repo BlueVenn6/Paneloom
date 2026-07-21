@@ -2,9 +2,6 @@ import os
 from pathlib import Path
 from threading import RLock
 
-from backend.app.services.project_service import _path_is_within
-
-
 _APPROVED_PATHS: dict[tuple[str, str], Path] = {}
 _APPROVAL_LOCK = RLock()
 _VALID_KINDS = {"folder", "backup"}
@@ -40,7 +37,8 @@ def require_approved_desktop_path(
     if not str(value or "").strip():
         return str(_canonical_path(default)) if default is not None else ""
 
-    requested = _canonical_path(value)
+    requested_text = os.path.realpath(os.path.expanduser(os.fspath(value)))
+    requested = Path(requested_text)
     key = (kind, os.path.normcase(os.fspath(requested)))
     with _APPROVAL_LOCK:
         approved = _APPROVED_PATHS.get(key)
@@ -54,11 +52,12 @@ def require_approved_desktop_path(
 
     test_root_value = os.getenv("PANELOOM_DESKTOP_TEST_ROOT", "").strip()
     if test_root_value:
-        test_root = _canonical_path(test_root_value)
-        if _path_is_within(requested, test_root):
+        test_root_text = os.path.realpath(os.path.expanduser(test_root_value))
+        test_root_prefix = test_root_text.rstrip("\\/") + os.sep
+        if requested_text == test_root_text or requested_text.startswith(test_root_prefix):
             if kind == "backup" and not requested.is_file():
                 raise FileNotFoundError("The selected backup no longer exists.")
-            return str(requested)
+            return requested_text
 
     raise PermissionError(
         "For safety, select this path with Paneloom's Windows file or folder picker."
