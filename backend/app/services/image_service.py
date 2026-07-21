@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from threading import BoundedSemaphore, Lock
@@ -28,6 +29,7 @@ from backend.app.services.language_service import (
     output_language_name,
 )
 from backend.app.services.project_service import (
+    find_existing_child_file,
     get_project_bible,
     get_project_dir,
     get_project_generated_dir,
@@ -185,8 +187,11 @@ def _generation_lock(project_id: str) -> Lock:
 def _reference_paths(project_id: str, filenames: list[str] | None) -> list[Path]:
     paths: list[Path] = []
     for filename in filenames or []:
-        path = get_project_reference_dir(project_id) / Path(filename).name
-        if path.exists() and path.is_file():
+        try:
+            path = find_existing_child_file(get_project_reference_dir(project_id), filename)
+        except (FileNotFoundError, ValueError):
+            continue
+        if path.is_file():
             paths.append(path)
     return paths
 
@@ -210,7 +215,7 @@ def _direct_reference_prompt_note(project_id: str, reference_paths: list[Path]) 
             ]
             if value
         )
-        identity_notes.append(f"{category}: {description}")
+        identity_notes.append(f"{category} asset {path.stem}: {description}")
     if not identity_notes:
         return ""
     return (
@@ -552,6 +557,7 @@ def _generate_shot_image_locked(
     shot = get_shot(project_id, shot_id)
     if not shot:
         raise FileNotFoundError(f"Shot not found: {shot_id}")
+    shot_id = str(shot["shot_id"])
     if is_offline_mode():
         return {
             "project_id": project_id,
@@ -678,7 +684,7 @@ def _generate_shot_image_locked(
     version_stamp = _generation_stamp()
     for size_item in generation_sizes:
         suffix = "" if size_item["id"] == "default" else f"-{size_item['id']}"
-        filename = f"{shot_id}{suffix}-{version_stamp}.png"
+        filename = f"panel-{version_stamp}-{uuid.uuid4().hex}{suffix}.png"
         output_path = output_dir / filename
         size_prompt = f"{prompt}\n\n{_target_aspect_note(size_item)}"
         provider_size = size_item.get("generation_size") or size_item["size"]
@@ -947,7 +953,7 @@ def save_reference_image(project_id: str, filename: str, content: bytes) -> dict
         raise ValueError("Reference image is empty.")
     if len(content) > MAX_REFERENCE_BYTES:
         raise ValueError("Reference image exceeds the 20MB limit.")
-    original_name = Path(filename).name
+    original_name = str(filename or "").strip()
     if not original_name:
         raise ValueError("Reference filename is missing.")
     try:
@@ -959,17 +965,20 @@ def save_reference_image(project_id: str, filename: str, content: bytes) -> dict
     extension = REFERENCE_FORMAT_EXTENSIONS.get(image_format)
     if not extension:
         raise ValueError("Reference image must be PNG, JPEG, or WebP.")
-    safe_stem = re.sub(r"[^\w.-]+", "-", Path(original_name).stem, flags=re.UNICODE).strip(".-")
-    safe_stem = safe_stem[:100] or "reference"
     output_dir = get_project_reference_dir(project_id)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{safe_stem}{extension}"
-    if (output_dir / safe_name).exists():
-        safe_name = f"{safe_stem}-{_generation_stamp()}{extension}"
+    safe_name = f"reference-{uuid.uuid4().hex}{extension}"
     output_path = output_dir / safe_name
     output_path.write_bytes(content)
+    display_name = Path(original_name).name[:255] or "reference"
+    _record_reference_metadata(
+        project_id,
+        [{"filename": safe_name, "name": display_name, "category": "uploaded"}],
+    )
     return {
         "filename": safe_name,
+        "original_filename": display_name,
+        "name": display_name,
         "path": to_project_relative_path(project_id, output_path),
         "url": project_file_url(project_id, "references", safe_name),
     }
@@ -977,12 +986,8 @@ def save_reference_image(project_id: str, filename: str, content: bytes) -> dict
 
 def delete_reference_image(project_id: str, filename: str) -> dict:
     require_project(project_id)
-    safe_name = Path(filename).name
-    if not safe_name or safe_name != filename:
-        raise ValueError("Invalid reference filename.")
-    path = get_project_reference_dir(project_id) / safe_name
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Reference image not found: {safe_name}")
+    path = find_existing_child_file(get_project_reference_dir(project_id), filename)
+    safe_name = path.name
     from backend.app.services.project_service import get_project_workspace, save_project_workspace
 
     workspace = get_project_workspace(project_id)
@@ -1226,9 +1231,10 @@ def analyze_reference_style(
     output_language: str = "source",
 ) -> dict:
     require_project(project_id)
-    reference_path = get_project_reference_dir(project_id) / Path(reference_filename).name
-    if not reference_path.exists() or not reference_path.is_file():
-        raise FileNotFoundError(f"Reference image not found: {reference_filename}")
+    reference_path = find_existing_child_file(
+        get_project_reference_dir(project_id),
+        reference_filename,
+    )
 
     metrics = _image_style_metrics(reference_path)
     local_analysis = _local_style_analysis_prompt(metrics)
@@ -1367,6 +1373,7 @@ def set_shot_visual_anchor(project_id: str, shot_id: str, output_language: str =
     shot = get_shot(project_id, shot_id)
     if not shot:
         raise FileNotFoundError(f"Shot not found: {shot_id}")
+    shot_id = str(shot["shot_id"])
     output_path = str(shot.get("output_path") or "")
     if not output_path:
         raise ValueError("The panel must have a locally saved selected image before it can become the visual master.")

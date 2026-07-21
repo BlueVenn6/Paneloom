@@ -121,6 +121,7 @@ def start_desktop(root: Path, runtime_state: Path, provider_port: int, offline: 
         {
             "PANELOOM_APP_DATA_DIR": str(root / "appdata"),
             "PANELOOM_PROJECTS_HOME": str(root / "projects"),
+            "PANELOOM_DESKTOP_TEST_ROOT": str(root),
             "PANELOOM_SETTINGS_PATH": str(root / "appdata" / "config" / "settings.json"),
             "PANELOOM_RUNTIME_STATE_PATH": str(runtime_state),
             "PANELOOM_LEGACY_DATA_ROOT": str(root / "nonexistent legacy source"),
@@ -183,7 +184,7 @@ def backup_integrity(path: Path) -> dict:
         extra = sorted(names - expected - {"paneloom-backup-manifest.json"})
         size_mismatches = []
         checksum_mismatches = []
-        secret_found = False
+        content_scan_passed = True
         unrelated = []
         for entry in manifest["files"]:
             content = archive.read(entry["path"])
@@ -192,7 +193,7 @@ def backup_integrity(path: Path) -> dict:
             if hashlib.sha256(content).hexdigest() != entry["sha256"]:
                 checksum_mismatches.append(entry["path"])
             if b"controlled-test-key" in content or b'"api_key"' in content:
-                secret_found = True
+                content_scan_passed = False
             first = entry["path"].split("/", 1)[0].lower()
             if first in {"logs", "cache", "temp", "config"}:
                 unrelated.append(entry["path"])
@@ -203,14 +204,14 @@ def backup_integrity(path: Path) -> dict:
             "extra": extra,
             "size_mismatches": size_mismatches,
             "checksum_mismatches": checksum_mismatches,
-            "plaintext_secret": secret_found,
+            "content_scan_passed": content_scan_passed,
             "unrelated_global_files": unrelated,
             "valid": not (
                 missing
                 or extra
                 or size_mismatches
                 or checksum_mismatches
-                or secret_found
+                or not content_scan_passed
                 or unrelated
             ),
         }

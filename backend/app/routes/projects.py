@@ -22,6 +22,7 @@ from backend.app.services.project_service import (
     create_project,
     delete_project,
     duplicate_project,
+    find_existing_child_file,
     get_project_bible,
     get_project_workspace,
     get_project_export_dir,
@@ -32,6 +33,10 @@ from backend.app.services.project_service import (
     save_project_bible,
     save_project_workspace,
     update_project,
+)
+from backend.app.services.path_authorization_service import (
+    approve_desktop_path,
+    require_approved_desktop_path,
 )
 from backend.app.services.project_portability_service import (
     create_project_backup,
@@ -95,7 +100,9 @@ def get_project_storage() -> ApiResponse:
 def choose_project_folder() -> ApiResponse:
     try:
         path = _desktop_dialog("folder")
-    except RuntimeError as exc:
+        if path:
+            path = approve_desktop_path(path, "folder")
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=bool(path), message="Folder selected." if path else "Folder selection cancelled.", data={"path": path})
 
@@ -104,7 +111,9 @@ def choose_project_folder() -> ApiResponse:
 def choose_backup_file() -> ApiResponse:
     try:
         path = _desktop_dialog("backup")
-    except RuntimeError as exc:
+        if path:
+            path = approve_desktop_path(path, "backup")
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=bool(path), message="Backup selected." if path else "Backup selection cancelled.", data={"path": path})
 
@@ -151,10 +160,11 @@ def save_desktop_export(
 @router.post("/open")
 def open_project(payload: ProjectPathRequest) -> ApiResponse:
     try:
-        project = open_project_directory(payload.path)
+        approved_path = require_approved_desktop_path(payload.path, "folder")
+        project = open_project_directory(approved_path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, ValueError, FileExistsError) as exc:
+    except (OSError, ValueError, FileExistsError, PermissionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Project opened.", data=project)
 
@@ -162,14 +172,20 @@ def open_project(payload: ProjectPathRequest) -> ApiResponse:
 @router.post("/restore")
 def restore_project(payload: ProjectRestoreRequest) -> ApiResponse:
     try:
-        project = restore_project_backup(
-            payload.backup_path,
+        approved_backup = require_approved_desktop_path(payload.backup_path, "backup")
+        approved_destination = require_approved_desktop_path(
             payload.destination_parent,
+            "folder",
+            default=project_service.PROJECTS_HOME,
+        )
+        project = restore_project_backup(
+            approved_backup,
+            approved_destination,
             payload.restored_name,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, ValueError, FileExistsError) as exc:
+    except (OSError, ValueError, FileExistsError, PermissionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Project restored as a new project.", data=project)
 
@@ -182,7 +198,14 @@ def get_projects() -> ApiResponse:
 @router.post("")
 def post_project(payload: ProjectCreate) -> ApiResponse:
     try:
-        project = create_project(payload)
+        approved_parent = require_approved_desktop_path(
+            payload.parent_directory,
+            "folder",
+            default=project_service.PROJECTS_HOME,
+        )
+        project = create_project(payload.model_copy(update={"parent_directory": approved_parent}))
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Project created.", data=project)
@@ -213,10 +236,15 @@ def post_duplicate_project(project_id: str) -> ApiResponse:
 @router.post("/{project_id}/migrate")
 def migrate_project(project_id: str, payload: ProjectMigrationRequest) -> ApiResponse:
     try:
-        result = migrate_legacy_project(project_id, payload.destination_parent)
+        approved_destination = require_approved_desktop_path(
+            payload.destination_parent,
+            "folder",
+            default=project_service.PROJECTS_HOME,
+        )
+        result = migrate_legacy_project(project_id, approved_destination)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, ValueError, FileExistsError) as exc:
+    except (OSError, ValueError, FileExistsError, PermissionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Legacy project migrated without modifying its source.", data=result)
 
@@ -224,14 +252,20 @@ def migrate_project(project_id: str, payload: ProjectMigrationRequest) -> ApiRes
 @router.post("/{project_id}/backup")
 def backup_project(project_id: str, payload: ProjectBackupRequest) -> ApiResponse:
     try:
+        approved_destination = require_approved_desktop_path(
+            payload.destination_directory,
+            "folder",
+            default=project_service.get_project_backup_dir(project_id),
+        )
         result = create_project_backup(
             project_id,
-            payload.destination_directory,
+            approved_destination,
             payload.include_exports,
         )
+        approve_desktop_path(result["backup_path"], "backup")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, PermissionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(ok=True, message="Project backup created and verified.", data=result)
 
@@ -246,13 +280,10 @@ def get_project_file(project_id: str, category: str, filename: str):
             "references": get_project_reference_dir,
             "exports": get_project_export_dir,
         }
-        if category not in bases or Path(filename).name != filename:
+        if category not in bases:
             raise ValueError("Invalid project file path.")
         base = bases[category](project_id).resolve()
-        path = (base / filename).resolve()
-        path.relative_to(base)
-        if not path.is_file():
-            raise FileNotFoundError("Project file not found.")
+        path = find_existing_child_file(base, filename)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
