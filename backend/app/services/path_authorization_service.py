@@ -52,12 +52,14 @@ def require_approved_desktop_path(
 
     test_root_value = os.getenv("PANELOOM_DESKTOP_TEST_ROOT", "").strip()
     if test_root_value:
-        test_root_text = os.path.realpath(os.path.expanduser(test_root_value))
+        full_path = os.path.normpath(requested_text)
+        test_root_text = os.path.normpath(os.path.realpath(os.path.expanduser(test_root_value)))
         test_root_prefix = test_root_text.rstrip("\\/") + os.sep
-        if requested_text == test_root_text or requested_text.startswith(test_root_prefix):
-            if kind == "backup" and not requested.is_file():
-                raise FileNotFoundError("The selected backup no longer exists.")
-            return requested_text
+        if not full_path.startswith(test_root_prefix):
+            raise PermissionError("The test path is outside the controlled desktop test root.")
+        if kind == "backup" and not Path(full_path).is_file():
+            raise FileNotFoundError("The selected backup no longer exists.")
+        return full_path
 
     raise PermissionError(
         "For safety, select this path with Paneloom's Windows file or folder picker."
