@@ -54,9 +54,11 @@ class ProjectPathSecurityTests(unittest.TestCase):
         directory.mkdir()
         expected = directory / "panel.png"
         expected.write_bytes(b"panel")
-        self.assertEqual(
-            project_service.find_existing_child_file(directory, "panel.png"),
-            expected,
+        self.assertTrue(
+            os.path.samefile(
+                project_service.find_existing_child_file(directory, "panel.png"),
+                expected,
+            )
         )
         with self.assertRaises((FileNotFoundError, ValueError)):
             project_service.find_existing_child_file(directory, "../outside.png")
