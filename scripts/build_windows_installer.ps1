@@ -1,5 +1,5 @@
 param(
-  [string]$BaselineTag = "v0.1.0-beta.1-functional-baseline"
+  [string]$BaselineTag = "v0.1.0-beta.2-functional-baseline"
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +60,10 @@ if (-not $packagingSourceTagCommit -or
     $packagingSourceTagCommit -ne $releaseSource.packaging_source_commit) {
   throw "The packaging source tag does not match release-source.json."
 }
+$openSourceTagCommit = (git rev-list -n 1 $releaseSource.open_source_tag).Trim()
+if (-not $openSourceTagCommit -or $openSourceTagCommit -ne $packagingCommit) {
+  throw "The open-source release tag must point to the exact clean commit being packaged."
+}
 git merge-base --is-ancestor $releaseSource.packaging_source_commit $packagingCommit
 if ($LASTEXITCODE -ne 0) {
   throw "The recorded packaging source is not an ancestor of the current release commit."
@@ -68,8 +72,10 @@ if ($LASTEXITCODE -ne 0) {
 $allowedChanges = @(
   ".gitignore",
   ".github/CODEOWNERS",
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/workflows/ci.yml",
   "CHANGELOG.md",
+  "VERSION",
   "README.md",
   "README.en.md",
   "README.ja.md",
@@ -80,6 +86,8 @@ $allowedChanges = @(
   "docs/open_source_release_readiness_2026-07-20.md",
   "docs/screenshots/",
   "docs/windows_installer_validation_2026-07-20.md",
+  "frontend/package.json",
+  "frontend/package-lock.json",
   "packaging/",
   "release-source.json",
   "requirements-build.txt",

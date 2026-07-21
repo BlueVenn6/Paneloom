@@ -1,8 +1,10 @@
 # Windows packaging
 
 The installer is built only from a clean Git worktree. The application source
-must match the annotated `v0.1.0-beta.1-functional-baseline` tag; later changes
+must match the annotated `v0.1.0-beta.2-functional-baseline` tag; later changes
 are limited to the packaging files listed by `scripts/build_windows_installer.ps1`.
+The exact clean commit being packaged must also be tagged
+`v0.1.0-beta.2-open-source` before the build starts.
 
 Build from PowerShell:
 

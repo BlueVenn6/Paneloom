@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0-beta.1",
-  "frozen_business_tag": "v0.1.0-beta.1-functional-baseline",
-  "frozen_business_commit": "09fe927ffde5d1775adc0f7904da021932ecf143",
-  "packaging_source_commit": "d34d148152f63846bc42fec083b20b3cd29da563",
-  "packaging_source_tag": "v0.1.0-beta.1-packaging-source",
-  "open_source_tag": "v0.1.0-beta.1-open-source"
+  "version": "0.1.0-beta.2",
+  "frozen_business_tag": "v0.1.0-beta.2-functional-baseline",
+  "frozen_business_commit": "bb191af22e55076fd6c09a04727d790ed7fa99ed",
+  "packaging_source_commit": "bb191af22e55076fd6c09a04727d790ed7fa99ed",
+  "packaging_source_tag": "v0.1.0-beta.2-packaging-source",
+  "open_source_tag": "v0.1.0-beta.2-open-source"
 }

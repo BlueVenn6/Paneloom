@@ -29,7 +29,7 @@ Paneloom 是一款 Windows 本地优先、面向单人创作者的 AI 漫画与�
 
 ## 当前状态
 
-`0.1.0-beta.1` 是 Windows 本地桌面 Beta。项目可移动性、备份恢复、production-like pywebview/WebView2 启动、随机回环端口和干净退出已经完成本机验证。软件不附带免费模型额度，需要用户自行配置兼容的文本和图片模型 API。
+`0.1.0-beta.2` 是 Windows 本地桌面安全维护 Beta。它保留项目可移动性、备份恢复、production-like pywebview/WebView2 启动、随机回环端口和干净退出，并加强了项目路径、备份恢复和本地文件访问边界。软件不附带免费模型额度，需要用户自行配置兼容的文本和图片模型 API。
 
 当前安装器尚未进行 Authenticode 签名，也尚未在独立干净的 Windows 10/11 机器完成最终验证，因此不应描述为正式签名发行版。
 

@@ -2,10 +2,10 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:18d7fd5b-55ba-40c2-87de-3e782c3d21e0",
+  "serialNumber": "urn:uuid:0b7782c1-a7d8-4b27-8e5e-36e8d3334dc1",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-20T06:22:11.288Z",
+    "timestamp": "2026-07-21T05:09:49.086Z",
     "lifecycles": [
       {
         "phase": "pre-build"
@@ -19,12 +19,12 @@
       }
     ],
     "component": {
-      "bom-ref": "paneloom-frontend@0.1.0-beta.1",
-      "type": "application",
+      "bom-ref": "paneloom-frontend@0.1.0-beta.2",
+      "type": "library",
       "name": "frontend",
-      "version": "0.1.0-beta.1",
+      "version": "0.1.0-beta.2",
       "scope": "required",
-      "purl": "pkg:npm/paneloom-frontend@0.1.0-beta.1",
+      "purl": "pkg:npm/paneloom-frontend@0.1.0-beta.2",
       "properties": [
         {
           "name": "cdx:npm:package:path",
@@ -6131,7 +6131,7 @@
   ],
   "dependencies": [
     {
-      "ref": "paneloom-frontend@0.1.0-beta.1",
+      "ref": "paneloom-frontend@0.1.0-beta.2",
       "dependsOn": [
         "lucide-react@1.14.0",
         "react@19.2.6",

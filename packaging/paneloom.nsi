@@ -17,7 +17,7 @@ Unicode true
   !error "WEBVIEW_BOOTSTRAPPER must point to the signed Microsoft bootstrapper."
 !endif
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.0-beta.1"
+  !define APP_VERSION "0.1.0-beta.2"
 !endif
 
 !define APP_REGISTRY_KEY "Software\Paneloom"
@@ -35,7 +35,7 @@ BrandingText "Paneloom"
 Icon "${SOURCE_ROOT}\desktop\resources\paneloom.ico"
 UninstallIcon "${SOURCE_ROOT}\desktop\resources\paneloom.ico"
 
-VIProductVersion "0.1.0.1"
+VIProductVersion "0.1.0.2"
 VIAddVersionKey /LANG=1033 "ProductName" "Paneloom"
 VIAddVersionKey /LANG=1033 "CompanyName" "Paneloom contributors"
 VIAddVersionKey /LANG=1033 "FileDescription" "Paneloom Windows installer"

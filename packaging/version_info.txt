@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(0, 1, 0, 1),
-    prodvers=(0, 1, 0, 1),
+    filevers=(0, 1, 0, 2),
+    prodvers=(0, 1, 0, 2),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Paneloom contributors'),
           StringStruct(u'FileDescription', u'Paneloom local AI comic storyboard desktop tool'),
-          StringStruct(u'FileVersion', u'0.1.0-beta.1'),
+          StringStruct(u'FileVersion', u'0.1.0-beta.2'),
           StringStruct(u'InternalName', u'Paneloom'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Paneloom contributors'),
           StringStruct(u'OriginalFilename', u'Paneloom.exe'),
           StringStruct(u'ProductName', u'Paneloom'),
-          StringStruct(u'ProductVersion', u'0.1.0-beta.1')
+          StringStruct(u'ProductVersion', u'0.1.0-beta.2')
         ]
       )
     ]),
