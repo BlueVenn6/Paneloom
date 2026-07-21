@@ -135,12 +135,10 @@ def _validate_project_id(project_id: str) -> str:
 
 
 def _path_is_within(path: str | Path, root: str | Path) -> bool:
-    resolved_path = os.path.realpath(os.fspath(path))
-    resolved_root = os.path.realpath(os.fspath(root))
-    try:
-        return os.path.commonpath((resolved_path, resolved_root)) == resolved_root
-    except ValueError:
-        return False
+    resolved_path = os.path.normcase(os.path.realpath(os.fspath(path)))
+    resolved_root = os.path.normcase(os.path.realpath(os.fspath(root)))
+    root_prefix = resolved_root.rstrip("\\/") + os.sep
+    return resolved_path == resolved_root or resolved_path.startswith(root_prefix)
 
 
 def resolve_path_within(root: str | Path, *parts: str | Path) -> Path:
@@ -515,7 +513,7 @@ def delete_project(project_id: str) -> dict:
     project_dir = get_project_dir(project_id)
     contained = is_self_contained_project(project_id)
     trash_root = project_dir.parent / ".Paneloom Trash" / (
-        f"{project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        f"deleted-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex}"
     )
     trash_root.parent.mkdir(parents=True, exist_ok=True)
     if trash_root.exists():
