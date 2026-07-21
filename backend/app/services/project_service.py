@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import re
 import shutil
 import uuid
@@ -133,6 +134,36 @@ def _validate_project_id(project_id: str) -> str:
     return value
 
 
+def _path_is_within(path: str | Path, root: str | Path) -> bool:
+    resolved_path = os.path.normcase(os.path.realpath(os.fspath(path)))
+    resolved_root = os.path.normcase(os.path.realpath(os.fspath(root)))
+    root_prefix = resolved_root.rstrip("\\/") + os.sep
+    return resolved_path == resolved_root or resolved_path.startswith(root_prefix)
+
+
+def resolve_path_within(root: str | Path, *parts: str | Path) -> Path:
+    """Resolve a path and reject absolute, traversal, and symlink escapes from root."""
+    resolved_root = os.path.realpath(os.fspath(root))
+    resolved_path = os.path.realpath(
+        os.path.join(resolved_root, *(os.fspath(part) for part in parts))
+    )
+    if not _path_is_within(resolved_path, resolved_root):
+        raise ValueError("Path escapes its allowed storage directory.")
+    return Path(resolved_path)
+
+
+def find_existing_child_file(root: str | Path, filename: str) -> Path:
+    """Return an existing direct child without constructing a path from the request value."""
+    requested_name = str(filename or "")
+    if not requested_name or requested_name in {".", ".."}:
+        raise ValueError("Invalid project asset filename.")
+    directory = Path(os.path.realpath(os.fspath(root)))
+    for candidate in directory.iterdir() if directory.is_dir() else ():
+        if candidate.name == requested_name and candidate.is_file() and not candidate.is_symlink():
+            return candidate
+    raise FileNotFoundError("Project file not found.")
+
+
 def _read_registry() -> dict[str, str]:
     if not REGISTRY_PATH.exists():
         return {}
@@ -216,7 +247,7 @@ def get_project_dir(project_id: str) -> Path:
         path = Path(registered).expanduser().resolve()
         if (path / PROJECT_CONFIG_FILENAME).is_file():
             return path
-    legacy = PROJECTS_DIR / project_id
+    legacy = resolve_path_within(PROJECTS_DIR, project_id)
     if (legacy / PROJECT_CONFIG_FILENAME).is_file():
         return legacy
     return Path(registered).expanduser().resolve() if registered else legacy
@@ -232,21 +263,24 @@ def is_self_contained_project(project_id: str) -> bool:
 
 
 def get_project_reference_dir(project_id: str) -> Path:
+    project_id = _validate_project_id(project_id)
     if is_self_contained_project(project_id):
         return get_project_dir(project_id) / "assets" / "references"
-    return REFERENCE_ASSETS_DIR / project_id
+    return resolve_path_within(REFERENCE_ASSETS_DIR, project_id)
 
 
 def get_project_generated_dir(project_id: str) -> Path:
+    project_id = _validate_project_id(project_id)
     if is_self_contained_project(project_id):
         return get_project_dir(project_id) / "generated"
-    return GENERATED_ASSETS_DIR / project_id
+    return resolve_path_within(GENERATED_ASSETS_DIR, project_id)
 
 
 def get_project_export_dir(project_id: str) -> Path:
+    project_id = _validate_project_id(project_id)
     if is_self_contained_project(project_id):
         return get_project_dir(project_id) / "exports"
-    return EXPORTS_DIR / project_id
+    return resolve_path_within(EXPORTS_DIR, project_id)
 
 
 def get_project_backup_dir(project_id: str) -> Path:
@@ -268,21 +302,30 @@ def to_project_relative_path(project_id: str, path: str | Path) -> str:
 
 
 def resolve_project_path(project_id: str, stored_path: str | Path) -> Path:
+    project_id = _validate_project_id(project_id)
     value = Path(stored_path)
-    if value.is_absolute():
-        return value
     project_dir = get_project_dir(project_id).resolve()
-    resolved = (project_dir / value).resolve()
-    try:
-        resolved.relative_to(project_dir)
-    except ValueError as exc:
-        raise ValueError("Project asset path escapes the project directory.") from exc
-    return resolved
+    if value.is_absolute():
+        resolved = Path(os.path.realpath(os.fspath(value)))
+        allowed_roots = [project_dir]
+        if not is_self_contained_project(project_id):
+            allowed_roots.extend(
+                (
+                    resolve_path_within(GENERATED_ASSETS_DIR, project_id),
+                    resolve_path_within(REFERENCE_ASSETS_DIR, project_id),
+                    resolve_path_within(EXPORTS_DIR, project_id),
+                )
+            )
+        if not any(_path_is_within(resolved, root) for root in allowed_roots):
+            raise ValueError("Project asset path escapes the project storage directories.")
+        return resolved
+    return resolve_path_within(project_dir, value)
 
 
 def project_file_url(project_id: str, category: str, filename: str) -> str:
-    safe_name = Path(filename).name
-    if not safe_name or safe_name != filename:
+    _validate_project_id(project_id)
+    safe_name = str(filename or "")
+    if not safe_name or safe_name in {".", ".."} or "/" in safe_name or "\\" in safe_name:
         raise ValueError("Invalid project asset filename.")
     return f"/projects/{project_id}/files/{category}/{safe_name}"
 
@@ -321,7 +364,7 @@ def _ensure_csv(path: Path, headers: list[str]) -> None:
 
 def create_project(payload: ProjectCreate) -> dict:
     ensure_runtime_dirs()
-    project_id = f"{_slugify(payload.name)}-{uuid.uuid4().hex[:8]}"
+    project_id = f"project-{uuid.uuid4().hex}"
     parent = Path(payload.parent_directory).expanduser() if payload.parent_directory.strip() else PROJECTS_HOME
     parent = parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
@@ -470,7 +513,7 @@ def delete_project(project_id: str) -> dict:
     project_dir = get_project_dir(project_id)
     contained = is_self_contained_project(project_id)
     trash_root = project_dir.parent / ".Paneloom Trash" / (
-        f"{project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        f"deleted-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex}"
     )
     trash_root.parent.mkdir(parents=True, exist_ok=True)
     if trash_root.exists():
@@ -480,9 +523,9 @@ def delete_project(project_id: str) -> dict:
 
     if not contained:
         for label, source in [
-            ("generated", GENERATED_ASSETS_DIR / project_id),
-            ("references", REFERENCE_ASSETS_DIR / project_id),
-            ("exports", EXPORTS_DIR / project_id),
+            ("generated", resolve_path_within(GENERATED_ASSETS_DIR, project_id)),
+            ("references", resolve_path_within(REFERENCE_ASSETS_DIR, project_id)),
+            ("exports", resolve_path_within(EXPORTS_DIR, project_id)),
         ]:
             if source.exists():
                 shutil.move(str(source), str(trash_root / label))

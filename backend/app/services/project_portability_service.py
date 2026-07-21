@@ -73,6 +73,7 @@ def create_project_backup(
     include_exports: bool = True,
 ) -> dict:
     project = project_service.require_project(project_id)
+    project_id = project_service._validate_project_id(str(project["project_id"]))
     if not project_service.is_self_contained_project(project_id):
         raise ValueError("Migrate this legacy project before creating a portable backup.")
     project_dir = project_service.get_project_dir(project_id)
@@ -158,8 +159,8 @@ def restore_project_backup(
         else project_service.PROJECTS_HOME.resolve()
     )
     destination.mkdir(parents=True, exist_ok=True)
-    restore_id = f"{source_id}-restored-{uuid.uuid4().hex[:8]}"
-    staging = destination / f".{restore_id}.restore-{uuid.uuid4().hex}"
+    restore_id = f"project-{uuid.uuid4().hex}"
+    staging = destination / f".paneloom-restore-{uuid.uuid4().hex}"
     final = destination / restore_id
     if final.exists():
         raise FileExistsError("Restore destination already exists.")
@@ -340,16 +341,17 @@ def _ensure_legacy_minimum_files(project_dir: Path) -> list[str]:
 
 
 def _create_legacy_migration_backup(project_id: str, destination_parent: Path) -> Path:
-    source = PROJECTS_DIR / project_id
+    project_id = project_service._validate_project_id(project_id)
+    source = project_service.resolve_path_within(PROJECTS_DIR, project_id)
     backup_dir = destination_parent / "_migration_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     output = backup_dir / f"{project_id}-legacy-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
     temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
     sources = [
         (source, "project"),
-        (GENERATED_ASSETS_DIR / project_id, "generated"),
-        (REFERENCE_ASSETS_DIR / project_id, "references"),
-        (EXPORTS_DIR / project_id, "exports"),
+        (project_service.resolve_path_within(GENERATED_ASSETS_DIR, project_id), "generated"),
+        (project_service.resolve_path_within(REFERENCE_ASSETS_DIR, project_id), "references"),
+        (project_service.resolve_path_within(EXPORTS_DIR, project_id), "exports"),
     ]
     try:
         with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -366,11 +368,12 @@ def _create_legacy_migration_backup(project_id: str, destination_parent: Path) -
 
 
 def migrate_legacy_project(project_id: str, destination_parent: str = "") -> dict:
-    project_service._validate_project_id(project_id)
-    source = PROJECTS_DIR / project_id
+    project_id = project_service._validate_project_id(project_id)
+    source = project_service.resolve_path_within(PROJECTS_DIR, project_id)
     config = project_service._read_json(source / project_service.PROJECT_CONFIG_FILENAME, None)
     if not isinstance(config, dict) or config.get("project_id") != project_id:
         raise FileNotFoundError(f"Legacy project not found: {project_id}")
+    project_id = project_service._validate_project_id(str(config["project_id"]))
     destination = (
         Path(destination_parent).expanduser().resolve()
         if destination_parent.strip()
@@ -394,13 +397,13 @@ def migrate_legacy_project(project_id: str, destination_parent: str = "") -> dic
         raise FileExistsError(f"Migration destination already exists: {final}")
 
     backup = _create_legacy_migration_backup(project_id, destination)
-    staging = destination / f".{project_id}.migration-{uuid.uuid4().hex}"
+    staging = destination / f".paneloom-migration-{uuid.uuid4().hex}"
     try:
         shutil.copytree(source, staging)
         for source_assets, target_relative in [
-            (GENERATED_ASSETS_DIR / project_id, Path("generated")),
-            (REFERENCE_ASSETS_DIR / project_id, Path("assets") / "references"),
-            (EXPORTS_DIR / project_id, Path("exports")),
+            (project_service.resolve_path_within(GENERATED_ASSETS_DIR, project_id), Path("generated")),
+            (project_service.resolve_path_within(REFERENCE_ASSETS_DIR, project_id), Path("assets") / "references"),
+            (project_service.resolve_path_within(EXPORTS_DIR, project_id), Path("exports")),
         ]:
             target = staging / target_relative
             target.mkdir(parents=True, exist_ok=True)

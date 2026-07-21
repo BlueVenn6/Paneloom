@@ -17,11 +17,11 @@ SENSITIVE_PATH_PARTS = {
     "temp",
     "uploads",
 }
-SECRET_PATTERNS = {
-    "OpenAI-style API key": re.compile(rb"sk-[A-Za-z0-9_-]{16,}"),
-    "Google-style API key": re.compile(rb"AIza[0-9A-Za-z_-]{20,}"),
-    "private key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-}
+CREDENTIAL_PATTERNS = (
+    re.compile(rb"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(rb"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+)
 
 
 def tracked_files() -> list[Path]:
@@ -54,13 +54,12 @@ def main() -> int:
         except OSError as exc:
             failures.append(f"could not scan {normalized}: {exc}")
             continue
-        for label, pattern in SECRET_PATTERNS.items():
+        for pattern in CREDENTIAL_PATTERNS:
             if pattern.search(content):
-                failures.append(f"{label} pattern in tracked file: {normalized}")
+                failures.append(f"credential pattern in tracked file: {normalized}")
 
     if failures:
-        for failure in sorted(set(failures)):
-            print(f"ERROR: {failure}")
+        print(f"ERROR: repository hygiene check found {len(set(failures))} blocked tracked item(s).")
         return 1
     print("Repository hygiene check passed: no tracked secrets or runtime user-data paths.")
     return 0

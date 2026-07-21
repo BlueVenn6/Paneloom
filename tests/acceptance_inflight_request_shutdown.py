@@ -24,6 +24,7 @@ def start_launcher(root: Path, runtime_state: Path, provider_port: int):
         {
             "PANELOOM_APP_DATA_DIR": str(root / "appdata"),
             "PANELOOM_PROJECTS_HOME": str(root / "projects"),
+            "PANELOOM_DESKTOP_TEST_ROOT": str(root),
             "PANELOOM_SETTINGS_PATH": str(root / "appdata" / "config" / "settings.json"),
             "PANELOOM_RUNTIME_STATE_PATH": str(runtime_state),
             "PANELOOM_LEGACY_DATA_ROOT": str(root / "nonexistent legacy source"),

@@ -499,7 +499,14 @@ def _feedback_path(project_id: str) -> Path:
 
 
 def _review_path(project_id: str, period: str) -> Path:
-    return get_project_dir(project_id) / f"{period}_review.json"
+    filenames = {
+        "week": "week_review.json",
+        "month": "month_review.json",
+    }
+    filename = filenames.get(period)
+    if filename is None:
+        raise ValueError("Review period must be week or month.")
+    return get_project_dir(project_id) / filename
 
 
 def _read_json(path: Path, fallback):
